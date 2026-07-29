@@ -1,0 +1,202 @@
+package droids
+
+import (
+	"context"
+	"fmt"
+	"sync"
+	"time"
+)
+
+// droid.go — the ergonomic facade composing the three layers: a Provider
+// (model abstraction), the agent loop, and Storage (durability). One Droid is
+// one session/conversation; create many for many concurrent sessions.
+
+// Options configures a Droid.
+type Options struct {
+	// Provider is the model abstraction (see NewProvider). Required.
+	Provider Provider
+	// Model is the user-facing model id, resolved against Provider. Required.
+	Model string
+	// SystemPrompt is sent with every turn.
+	SystemPrompt string
+	// Tools are available to the model.
+	Tools []AnyTool
+	// Storage persists and rehydrates the transcript. Defaults to an
+	// in-memory store (NewMemoryStorage) when nil.
+	Storage Storage
+	// Session identifies this conversation for Storage. When Storage is set
+	// and a transcript exists, it is loaded on New (resume).
+	Session string
+	// MaxSteps bounds the tool loop per run. Default: 16.
+	MaxSteps int
+	// Reasoning selects a default thinking level for turns.
+	Reasoning string
+}
+
+// Droid is a live agent session.
+type Droid struct {
+	opts     Options
+	provider Provider
+	model    Model
+	tools    map[string]AnyTool
+
+	mu         sync.Mutex
+	transcript []Message
+	steering   []Message
+	cancelRun  context.CancelFunc
+
+	queue     chan queuedPrompt
+	eventsMu  sync.Mutex
+	events    chan Event
+	closeOnce sync.Once
+	closed    chan struct{}
+}
+
+type queuedPrompt struct {
+	messages []Message
+	result   chan runResult
+}
+
+type runResult struct {
+	message AssistantMessage
+	err     error
+}
+
+// New creates a Droid, resolving the model and rehydrating stored history.
+func New(opts Options) (*Droid, error) {
+	if opts.Provider == nil {
+		return nil, fmt.Errorf("droids: Options.Provider is required")
+	}
+	if opts.Model == "" {
+		return nil, fmt.Errorf("droids: Options.Model is required")
+	}
+	model, ok := opts.Provider.Model(opts.Model)
+	if !ok {
+		return nil, fmt.Errorf("droids: unknown model %q (namespace as \"provider/model\" if ambiguous)", opts.Model)
+	}
+	if opts.MaxSteps <= 0 {
+		opts.MaxSteps = 16
+	}
+	if opts.Storage == nil {
+		opts.Storage = NewMemoryStorage()
+	}
+
+	d := &Droid{
+		opts:     opts,
+		provider: opts.Provider,
+		model:    model,
+		tools:    map[string]AnyTool{},
+		queue:    make(chan queuedPrompt, 64),
+		closed:   make(chan struct{}),
+	}
+	for _, t := range opts.Tools {
+		d.tools[t.schema().Name] = t
+	}
+
+	{
+		history, err := opts.Storage.Load(context.Background(), opts.Session)
+		if err != nil {
+			return nil, fmt.Errorf("droids: load session %q: %w", opts.Session, err)
+		}
+		d.transcript = history
+	}
+
+	go d.worker()
+	return d, nil
+}
+
+// Events returns the droid's long-lived event channel. The same channel is
+// returned on every call. It is created lazily: if you never call Events, the
+// loop runs without emitting live events (Storage persistence still happens).
+// The channel is closed when the droid is closed.
+func (d *Droid) Events() <-chan Event {
+	d.eventsMu.Lock()
+	defer d.eventsMu.Unlock()
+	if d.events == nil {
+		d.events = make(chan Event, 64)
+	}
+	return d.events
+}
+
+func (d *Droid) emit(ev Event) {
+	d.eventsMu.Lock()
+	ch := d.events
+	d.eventsMu.Unlock()
+	if ch == nil {
+		return
+	}
+	select {
+	case ch <- ev:
+	case <-d.closed:
+	}
+}
+
+// Send enqueues a user prompt. If the droid is idle it starts a run; if a run
+// is active the prompt is processed after it (a follow-up). Returns once the
+// prompt is enqueued, not when the run completes — use Events or Run to
+// observe progress.
+func (d *Droid) Send(_ context.Context, text string) error {
+	return d.enqueue(userText(text), nil)
+}
+
+// Run enqueues a prompt and blocks until its run completes, returning the final
+// assistant message. Convenience for one-shot workloads; does not require
+// consuming Events.
+func (d *Droid) Run(ctx context.Context, text string) (AssistantMessage, error) {
+	result := make(chan runResult, 1)
+	if err := d.enqueue(userText(text), result); err != nil {
+		return AssistantMessage{}, err
+	}
+	select {
+	case r := <-result:
+		return r.message, r.err
+	case <-ctx.Done():
+		return AssistantMessage{}, ctx.Err()
+	case <-d.closed:
+		return AssistantMessage{}, fmt.Errorf("droids: droid closed")
+	}
+}
+
+func (d *Droid) enqueue(msg Message, result chan runResult) error {
+	select {
+	case <-d.closed:
+		return fmt.Errorf("droids: droid closed")
+	default:
+	}
+	select {
+	case d.queue <- queuedPrompt{messages: []Message{msg}, result: result}:
+		return nil
+	case <-d.closed:
+		return fmt.Errorf("droids: droid closed")
+	}
+}
+
+// Steer injects a message mid-run. It is picked up between turns of the active
+// run (or the next run if idle).
+func (d *Droid) Steer(text string) {
+	d.mu.Lock()
+	d.steering = append(d.steering, userText(text))
+	d.mu.Unlock()
+}
+
+// Abort interrupts the active run, if any. The current turn ends with an
+// aborted error event.
+func (d *Droid) Abort() {
+	d.mu.Lock()
+	cancel := d.cancelRun
+	d.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+}
+
+// Close shuts the droid down and closes the events channel. Idempotent.
+func (d *Droid) Close() {
+	d.closeOnce.Do(func() {
+		close(d.closed)
+	})
+}
+
+func userText(text string) UserMessage {
+	return UserMessage{Content: []Content{TextContent{Text: text}}, Timestamp: time.Now().UnixMilli()}
+}

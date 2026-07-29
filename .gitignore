@@ -1,0 +1,15 @@
+# Binaries
+/chat
+*.exe
+*.out
+
+# Go
+/vendor/
+*.test
+
+# Env / secrets
+.env
+.env.*
+
+# Editor / OS
+.DS_Store
