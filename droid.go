@@ -32,6 +32,15 @@ type Options struct {
 	// Reasoning selects a default thinking level for turns.
 	Reasoning string
 
+	// ToolExecution sets the default execution mode for a batch of tool calls
+	// (ModeParallel | ModeSequential). Default: parallel. A batch runs
+	// sequentially if this is sequential or any tool in it is ModeSequential.
+	ToolExecution ExecutionMode
+
+	// MaxParallelTools caps concurrent tool executions in a parallel batch.
+	// 0 (default) means unbounded.
+	MaxParallelTools int
+
 	// BeforeToolCall runs after arguments are decoded and before a tool
 	// executes. It can block the call, or short-circuit it with a cached
 	// result (idempotency). A returned error degrades to an error tool result;

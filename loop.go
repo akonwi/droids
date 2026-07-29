@@ -3,6 +3,7 @@ package droids
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 )
 
@@ -138,31 +139,44 @@ func (d *Droid) streamTurn(ctx context.Context) AssistantMessage {
 	return final
 }
 
-// executeTools runs each tool call sequentially and returns the results.
-// Parallel execution is a future enhancement; ordering guarantees will be
-// revisited then.
+// toolOutcome is the finalized result of a single tool call.
+type toolOutcome struct {
+	result  ToolResult
+	isError bool
+}
+
+// executeTools runs a batch of tool calls and returns their results in
+// assistant source order. The batch runs sequentially when Options.ToolExecution
+// is sequential or any tool in the batch is ModeSequential; otherwise tools
+// execute concurrently. Regardless of execution order, ToolResultMessages are
+// appended to the transcript in source order (deterministic for the model and
+// resume); live ToolExecutionEnd events fire in completion order.
 func (d *Droid) executeTools(ctx context.Context, calls []ToolCall) []ToolResultMessage {
+	if d.batchIsSequential(calls) {
+		return d.executeToolsSequential(ctx, calls)
+	}
+	return d.executeToolsParallel(ctx, calls)
+}
+
+func (d *Droid) batchIsSequential(calls []ToolCall) bool {
+	if d.opts.ToolExecution == ModeSequential {
+		return true
+	}
+	for _, call := range calls {
+		if t, ok := d.tools[call.Name]; ok && t.mode() == ModeSequential {
+			return true
+		}
+	}
+	return false
+}
+
+func (d *Droid) executeToolsSequential(ctx context.Context, calls []ToolCall) []ToolResultMessage {
 	var out []ToolResultMessage
 	for _, call := range calls {
 		d.emit(ToolExecutionStart{ToolCallID: call.ID, ToolName: call.Name, Arguments: call.Arguments})
-
 		result, isError := d.runToolCall(ctx, call)
-
 		d.emit(ToolExecutionEnd{ToolCallID: call.ID, ToolName: call.Name, Result: result, IsError: isError})
-
-		trm := ToolResultMessage{
-			ToolCallID: call.ID,
-			ToolName:   call.Name,
-			Content:    result.Content,
-			Details:    result.Details,
-			IsError:    isError,
-			Timestamp:  time.Now().UnixMilli(),
-		}
-		d.appendMessage(ctx, trm)
-		d.emit(MessageStart{Message: trm})
-		d.emit(MessageEnd{Message: trm})
-		out = append(out, trm)
-
+		out = append(out, d.finalizeToolResult(ctx, call, result, isError))
 		if ctx.Err() != nil {
 			break
 		}
@@ -170,29 +184,107 @@ func (d *Droid) executeTools(ctx context.Context, calls []ToolCall) []ToolResult
 	return out
 }
 
-// runToolCall applies the before hook (block / short-circuit), executes the
-// tool if not skipped, then applies the after hook. Hook errors degrade to an
-// error result rather than crashing the loop.
-func (d *Droid) runToolCall(ctx context.Context, call ToolCall) (ToolResult, bool) {
-	if d.opts.BeforeToolCall != nil {
-		br, err := d.opts.BeforeToolCall(ctx, BeforeToolContext{ToolCall: call, Args: call.Arguments})
-		switch {
-		case err != nil:
-			return ToolText(err.Error()), true
-		case br.Block:
-			reason := br.Reason
-			if reason == "" {
-				reason = "Tool execution was blocked"
-			}
-			return ToolText(reason), true
-		case br.Result != nil:
-			// Short-circuit: skip execution and the after hook.
-			return *br.Result, false
+func (d *Droid) executeToolsParallel(ctx context.Context, calls []ToolCall) []ToolResultMessage {
+	outcomes := make([]toolOutcome, len(calls))
+	var execIdx []int
+
+	// Preflight, sequentially in source order: emit starts and resolve before
+	// hooks (block / short-circuit) deterministically. Survivors execute.
+	for i, call := range calls {
+		d.emit(ToolExecutionStart{ToolCallID: call.ID, ToolName: call.Name, Arguments: call.Arguments})
+		if oc, proceed := d.beforeTool(ctx, call); !proceed {
+			outcomes[i] = oc
+			d.emit(ToolExecutionEnd{ToolCallID: call.ID, ToolName: call.Name, Result: oc.result, IsError: oc.isError})
+			continue
 		}
+		execIdx = append(execIdx, i)
 	}
 
-	result, isError := d.executeTool(ctx, call)
+	// Execute survivors concurrently; emit ToolExecutionEnd in completion order.
+	var wg sync.WaitGroup
+	var sem chan struct{}
+	if d.opts.MaxParallelTools > 0 {
+		sem = make(chan struct{}, d.opts.MaxParallelTools)
+	}
+	for _, i := range execIdx {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			if sem != nil {
+				sem <- struct{}{}
+				defer func() { <-sem }()
+			}
+			call := calls[i]
+			result, isError := d.executeAndAfter(ctx, call)
+			outcomes[i] = toolOutcome{result: result, isError: isError}
+			d.emit(ToolExecutionEnd{ToolCallID: call.ID, ToolName: call.Name, Result: result, IsError: isError})
+		}(i)
+	}
+	wg.Wait()
 
+	// Finalize in source order: append + persist + emit message events.
+	out := make([]ToolResultMessage, 0, len(calls))
+	for i, call := range calls {
+		oc := outcomes[i]
+		out = append(out, d.finalizeToolResult(ctx, call, oc.result, oc.isError))
+	}
+	return out
+}
+
+// finalizeToolResult appends a tool result to the transcript, persists it, and
+// emits its message lifecycle events.
+func (d *Droid) finalizeToolResult(ctx context.Context, call ToolCall, result ToolResult, isError bool) ToolResultMessage {
+	trm := ToolResultMessage{
+		ToolCallID: call.ID,
+		ToolName:   call.Name,
+		Content:    result.Content,
+		Details:    result.Details,
+		IsError:    isError,
+		Timestamp:  time.Now().UnixMilli(),
+	}
+	d.appendMessage(ctx, trm)
+	d.emit(MessageStart{Message: trm})
+	d.emit(MessageEnd{Message: trm})
+	return trm
+}
+
+// runToolCall runs the full before/execute/after path for one call. Used by
+// the sequential batch path.
+func (d *Droid) runToolCall(ctx context.Context, call ToolCall) (ToolResult, bool) {
+	if oc, proceed := d.beforeTool(ctx, call); !proceed {
+		return oc.result, oc.isError
+	}
+	return d.executeAndAfter(ctx, call)
+}
+
+// beforeTool applies the before hook. proceed is false when the hook produced a
+// terminal outcome (error, block, or short-circuit) and the tool must not run.
+// A short-circuit result also skips the after hook. Hook errors degrade to an
+// error result rather than crashing the loop.
+func (d *Droid) beforeTool(ctx context.Context, call ToolCall) (oc toolOutcome, proceed bool) {
+	if d.opts.BeforeToolCall == nil {
+		return toolOutcome{}, true
+	}
+	br, err := d.opts.BeforeToolCall(ctx, BeforeToolContext{ToolCall: call, Args: call.Arguments})
+	switch {
+	case err != nil:
+		return toolOutcome{result: ToolText(err.Error()), isError: true}, false
+	case br.Block:
+		reason := br.Reason
+		if reason == "" {
+			reason = "Tool execution was blocked"
+		}
+		return toolOutcome{result: ToolText(reason), isError: true}, false
+	case br.Result != nil:
+		// Short-circuit: skip execution and the after hook.
+		return toolOutcome{result: *br.Result}, false
+	}
+	return toolOutcome{}, true
+}
+
+// executeAndAfter runs the tool and applies the after hook.
+func (d *Droid) executeAndAfter(ctx context.Context, call ToolCall) (ToolResult, bool) {
+	result, isError := d.executeTool(ctx, call)
 	if d.opts.AfterToolCall != nil {
 		replacement, err := d.opts.AfterToolCall(ctx, AfterToolContext{ToolCall: call, Result: result, IsError: isError})
 		if err != nil {
