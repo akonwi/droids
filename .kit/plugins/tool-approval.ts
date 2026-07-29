@@ -11,7 +11,7 @@ export default function ToolApprovalPlugin(kit: PluginAPI) {
 			message: summarizeCall(toolCall),
 			confirmLabel: "Allow",
 			cancelLabel: "Block",
-			defaultValue: false,
+			defaultValue: true,
 		});
 
 		if (approved) return { action: "allow" };
