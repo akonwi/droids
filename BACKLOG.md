@@ -10,7 +10,3 @@ Delete items once they are done — this file tracks only outstanding work.
       so they slot in without core changes.
 - [ ] OAuth / credential-store flows (api-key + custom headers only today —
       fits AI Gateway).
-
-## Durable runtime (belongs in the runtime that wraps `droids`)
-- [ ] Per-user concurrency control.
-- [ ] Leasing / recovery across process restarts.
