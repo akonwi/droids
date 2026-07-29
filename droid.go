@@ -13,9 +13,9 @@ import (
 
 // Options configures a Droid.
 type Options struct {
-	// Provider is the model abstraction (see NewProvider). Required.
-	Provider Provider
-	// Model is the user-facing model id, resolved against Provider. Required.
+	// Providers is the model abstraction (see NewProviders). Required.
+	Providers Providers
+	// Model is the user-facing model id, resolved against Providers. Required.
 	Model string
 	// SystemPrompt is sent with every turn.
 	SystemPrompt string
@@ -55,10 +55,10 @@ type Options struct {
 
 // Droid is a live agent session.
 type Droid struct {
-	opts     Options
-	provider Provider
-	model    Model
-	tools    map[string]AnyTool
+	opts      Options
+	providers Providers
+	model     Model
+	tools     map[string]AnyTool
 
 	mu         sync.Mutex
 	transcript []Message
@@ -84,13 +84,13 @@ type runResult struct {
 
 // New creates a Droid, resolving the model and rehydrating stored history.
 func New(opts Options) (*Droid, error) {
-	if opts.Provider == nil {
-		return nil, fmt.Errorf("droids: Options.Provider is required")
+	if opts.Providers == nil {
+		return nil, fmt.Errorf("droids: Options.Providers is required")
 	}
 	if opts.Model == "" {
 		return nil, fmt.Errorf("droids: Options.Model is required")
 	}
-	model, ok := opts.Provider.Model(opts.Model)
+	model, ok := opts.Providers.Model(opts.Model)
 	if !ok {
 		return nil, fmt.Errorf("droids: unknown model %q (namespace as \"provider/model\" if ambiguous)", opts.Model)
 	}
@@ -102,12 +102,12 @@ func New(opts Options) (*Droid, error) {
 	}
 
 	d := &Droid{
-		opts:     opts,
-		provider: opts.Provider,
-		model:    model,
-		tools:    map[string]AnyTool{},
-		queue:    make(chan queuedPrompt, 64),
-		closed:   make(chan struct{}),
+		opts:      opts,
+		providers: opts.Providers,
+		model:     model,
+		tools:     map[string]AnyTool{},
+		queue:     make(chan queuedPrompt, 64),
+		closed:    make(chan struct{}),
 	}
 	for _, t := range opts.Tools {
 		d.tools[t.schema().Name] = t

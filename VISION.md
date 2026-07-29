@@ -21,25 +21,25 @@ OpenAI-compatible provider and grows outward.
 │ Droid / loop      bounded multi-step tool loop, steering,    │  Layer 2
 │                   follow-up, abort, event stream             │
 ├─────────────────────────────────────────────────────────────┤
-│ Provider          model abstraction + multiprovider          │  Layer 1
-│                   streaming (registry over ProviderConfigs)  │
+│ Providers         model abstraction + multiprovider          │  Layer 1
+│                   streaming (registry over Provider configs)  │
 └─────────────────────────────────────────────────────────────┘
 ```
 
-The `Droid` facade composes all three, but `Provider` (Layer 1) is usable on
+The `Droid` facade composes all three, but `Providers` (Layer 1) is usable on
 its own for raw streaming, and `Storage` is a plain interface you back with
 Postgres or leave nil.
 
 ## Shape of the API
 
 ```go
-provider, _ := droids.NewProvider(
+providers, _ := droids.NewProviders(
     droids.OpenAI{APIKey: key, BaseURL: gateway}, // AI Gateway = custom BaseURL
     // droids.Anthropic{...},                      // later
 )
 
 d, _ := droids.New(droids.Options{
-    Provider:     provider,
+    Providers:    providers,
     Model:        "gpt-5.6-sol",
     SystemPrompt: "...",
     Tools:        []droids.AnyTool{echoTool},
@@ -78,15 +78,15 @@ for ev := range d.Events() {
   `AnyTool` via `NewTool`. Arguments are JSON-decoded into `Args` before the
   call, and the tool's JSON Schema is derived from `Args` by reflection (set
   `Parameters` explicitly to override).
-- **Providers are a registry.** `NewProvider(...ProviderConfig)` composes
-  configs into one routing `Provider` that dispatches by the model's owning
+- **Providers are a registry.** `NewProviders(...Provider)` composes provider
+  configs into one routing `Providers` that dispatches by the model's owning
   provider. Model ids resolve bare, or namespaced (`"provider/model"`) to
   disambiguate. Mirrors pi's `Models` layer.
 - **Storage is `Load` + `Append`.** The loop appends on every completed
   message, independent of the events channel, so persistence works whether or
   not anyone is watching. Defaults to an in-memory store; back it with Postgres
   for durable runs.
-- **Layers stay visible.** The facade composes; it does not hide `Provider`,
+- **Layers stay visible.** The facade composes; it does not hide `Providers`,
   the loop, or `Storage`.
 
 ## Neutral vocabulary
@@ -94,6 +94,6 @@ for ev := range d.Events() {
 Messages (`UserMessage`, `AssistantMessage`, `ToolResultMessage`) and content
 blocks (`TextContent`, `ThinkingContent`, `ImageContent`, `ToolCall`) are
 provider-neutral. Providers translate to/from their wire format at the edge;
-the loop and storage only ever see these types. `Provider.Stream` emits a
+the loop and storage only ever see these types. `Providers.Stream` emits a
 `StreamEvent` protocol (start / deltas / done / error) that assembles into one
 `AssistantMessage`; the loop re-emits higher-level agent `Event`s.

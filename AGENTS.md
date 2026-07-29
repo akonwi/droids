@@ -28,7 +28,7 @@ and grows outward.
 | `message.go` | Neutral conversation vocabulary: `Message`, content blocks. |
 | `model.go` | `Model` metadata, `Usage`/cost accounting. |
 | `stream.go` | Provider streaming contract: `Request`, `StreamEvent`, `Stream`. |
-| `provider.go` | `Provider` interface + `NewProvider` registry (routes by model). |
+| `provider.go` | `Providers` registry + `NewProviders` (routes by model); `Provider` config interface. |
 | `provider_openai.go` | OpenAI-compatible provider, backed by `openai-go`. |
 | `tool.go` | Generic `Tool[Args]` + `NewTool` erasing to `AnyTool`. |
 | `storage.go` | `Storage` seam + `MemoryStorage` (the default). |
@@ -59,20 +59,20 @@ and grows outward.
    consumed. `Storage` defaults to `MemoryStorage`; it is never nil after `New`.
 5. **Providers translate only at the edge.** The loop, storage, and events see
    only neutral types (`message.go`). Wire/SDK types stay inside `provider_*.go`.
-6. **Layers stay visible.** `Droid` composes `Provider` + loop + `Storage`; it
-   must not hide them. `Provider` is usable standalone for raw streaming.
+6. **Layers stay visible.** `Droid` composes `Providers` + loop + `Storage`; it
+   must not hide them. `Providers` is usable standalone for raw streaming.
 7. **`context.Context` threads through** all blocking calls. `Abort()` is
    ergonomic sugar over cancelling the active run's context.
 
 ## Adding a provider
 
-1. Add `provider_<name>.go` with a config struct implementing `ProviderConfig`
+1. Add `provider_<name>.go` with a config struct implementing `Provider`
    (`build() (providerEntry, error)`).
 2. Translate `Request` → wire format and the wire stream → `StreamEvent`s. Use a
    `pipeStream` (see `provider_openai.go`) as the `Stream` implementation.
 3. Encode all failures as `StreamError`; set `StopReasonAborted` when `ctx` is
    done.
-4. `Provider` is an interface — no changes needed to the registry.
+4. `Providers` is an interface — no changes needed to the registry.
 
 ## Validation (run before every commit)
 

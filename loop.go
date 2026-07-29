@@ -106,7 +106,7 @@ func (d *Droid) streamTurn(ctx context.Context) AssistantMessage {
 		MaxTokens:    d.model.MaxTokens,
 	}
 
-	stream := d.provider.Stream(ctx, d.model, req)
+	stream := d.providers.Stream(ctx, d.model, req)
 
 	started := false
 	for ev := range stream.Events() {

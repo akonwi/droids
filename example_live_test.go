@@ -24,7 +24,7 @@ func TestLive(t *testing.T) {
 		model = "gpt-4o-mini"
 	}
 
-	prov, err := NewProvider(OpenAI{
+	prov, err := NewProviders(OpenAI{
 		APIKey:  key,
 		BaseURL: os.Getenv("DROIDS_BASE_URL"),
 		Models:  []Model{{ID: model, MaxTokens: 256}},
@@ -53,7 +53,7 @@ func TestLive(t *testing.T) {
 	})
 
 	d, err := New(Options{
-		Provider:     prov,
+		Providers:    prov,
 		Model:        model,
 		SystemPrompt: "You are concise.",
 		Tools:        []AnyTool{weather},

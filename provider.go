@@ -7,13 +7,14 @@ import (
 	"time"
 )
 
-// provider.go — the multiprovider registry. NewProvider composes one or more
-// ProviderConfig values into a single Provider that routes each request to the
-// config that owns the model. This mirrors pi-ai's Models registry.
+// provider.go — the multiprovider registry. NewProviders composes one or more
+// Provider configs into a single Providers registry that routes each request to
+// the provider that owns the model. This mirrors pi-ai's Models registry.
 
-// Provider is the model-abstraction layer. It lists models and streams a
-// request against whichever registered provider owns the target model.
-type Provider interface {
+// Providers is the model-abstraction layer: a registry over one or more
+// Provider configs. It lists models and streams a request against whichever
+// registered provider owns the target model.
+type Providers interface {
 	// Models returns every model across all registered providers.
 	Models() []Model
 	// Model resolves a user-facing id to a concrete model. The id may be bare
@@ -23,13 +24,14 @@ type Provider interface {
 	Stream(ctx context.Context, model Model, req Request) Stream
 }
 
-// ProviderConfig is an individual provider's configuration. Each config knows
-// how to build itself into an internal entry (models + stream fn + auth).
-type ProviderConfig interface {
+// Provider is a single provider's configuration (e.g. OpenAI). Each one knows
+// how to build itself into an internal entry (models + stream fn + auth), and
+// is composed into a Providers registry by NewProviders.
+type Provider interface {
 	build() (providerEntry, error)
 }
 
-// providerEntry is the internal, resolved form of a ProviderConfig.
+// providerEntry is the internal, resolved form of a Provider.
 type providerEntry struct {
 	id     string
 	models map[string]Model
@@ -45,10 +47,10 @@ type registry struct {
 	ambiguous map[string]bool
 }
 
-// NewProvider composes provider configs into a single routing Provider.
-func NewProvider(configs ...ProviderConfig) (Provider, error) {
+// NewProviders composes provider configs into a single routing Providers registry.
+func NewProviders(configs ...Provider) (Providers, error) {
 	if len(configs) == 0 {
-		return nil, fmt.Errorf("droids: NewProvider requires at least one ProviderConfig")
+		return nil, fmt.Errorf("droids: NewProviders requires at least one Provider")
 	}
 	r := &registry{
 		entries:   map[string]providerEntry{},

@@ -36,7 +36,7 @@ func main() {
 		model = "gpt-4o-mini"
 	}
 
-	provider, err := droids.NewProvider(droids.OpenAI{
+	providers, err := droids.NewProviders(droids.OpenAI{
 		APIKey:  apiKey,
 		BaseURL: os.Getenv("DROIDS_BASE_URL"),
 		Models:  []droids.Model{{ID: model, MaxTokens: 1024}},
@@ -46,7 +46,7 @@ func main() {
 	}
 
 	d, err := droids.New(droids.Options{
-		Provider:     provider,
+		Providers:    providers,
 		Model:        model,
 		SystemPrompt: "You are a helpful, concise CLI assistant with read-only filesystem access. Use the tools to inspect files and directories.",
 		Tools:        fsTools(),

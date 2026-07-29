@@ -9,10 +9,10 @@ import (
 )
 
 // multiToolThenStop calls all of toolNames in one assistant message, then stops.
-func multiToolThenStop(t *testing.T, toolNames ...string) Provider {
+func multiToolThenStop(t *testing.T, toolNames ...string) Providers {
 	t.Helper()
 	calls := 0
-	prov, err := NewProvider(fauxProvider{
+	prov, err := NewProviders(fauxProvider{
 		model: Model{ID: "m"},
 		reply: func(req Request) AssistantMessage {
 			calls++
@@ -57,9 +57,9 @@ func TestParallelToolsRunConcurrently(t *testing.T) {
 	}
 
 	d, _ := New(Options{
-		Provider: multiToolThenStop(t, "a", "b", "c"),
-		Model:    "m",
-		Tools:    []AnyTool{slow("a"), slow("b"), slow("c")},
+		Providers: multiToolThenStop(t, "a", "b", "c"),
+		Model:     "m",
+		Tools:     []AnyTool{slow("a"), slow("b"), slow("c")},
 	})
 	defer d.Close()
 
@@ -84,9 +84,9 @@ func TestParallelTranscriptIsSourceOrder(t *testing.T) {
 		})
 	}
 	d, _ := New(Options{
-		Provider: multiToolThenStop(t, "a", "b"),
-		Model:    "m",
-		Tools:    []AnyTool{mk("a", 30*time.Millisecond), mk("b", 0)},
+		Providers: multiToolThenStop(t, "a", "b"),
+		Model:     "m",
+		Tools:     []AnyTool{mk("a", 30*time.Millisecond), mk("b", 0)},
 	})
 	defer d.Close()
 
@@ -126,8 +126,8 @@ func TestSequentialToolMForcesSerialBatch(t *testing.T) {
 		})
 	}
 	d, _ := New(Options{
-		Provider: multiToolThenStop(t, "x", "y"),
-		Model:    "m",
+		Providers: multiToolThenStop(t, "x", "y"),
+		Model:     "m",
 		// y is sequential, so the whole batch must serialize.
 		Tools: []AnyTool{mk("x", ModeParallel), mk("y", ModeSequential)},
 	})

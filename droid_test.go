@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-// fauxProvider is a ProviderConfig backed by a scripted stream, for testing
+// fauxProvider is a Provider config backed by a scripted stream, for testing
 // the loop without real network calls.
 type fauxProvider struct {
 	model Model
@@ -33,7 +33,7 @@ func (f fauxProvider) build() (providerEntry, error) {
 }
 
 func TestRunSingleTurn(t *testing.T) {
-	prov, err := NewProvider(fauxProvider{
+	prov, err := NewProviders(fauxProvider{
 		model: Model{ID: "test-model", MaxTokens: 100},
 		reply: func(req Request) AssistantMessage {
 			return AssistantMessage{
@@ -48,10 +48,10 @@ func TestRunSingleTurn(t *testing.T) {
 
 	store := NewMemoryStorage()
 	d, err := New(Options{
-		Provider: prov,
-		Model:    "test-model",
-		Storage:  store,
-		Session:  "s1",
+		Providers: prov,
+		Model:     "test-model",
+		Storage:   store,
+		Session:   "s1",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -74,7 +74,7 @@ func TestRunSingleTurn(t *testing.T) {
 
 func TestRunWithToolCall(t *testing.T) {
 	calls := 0
-	prov, _ := NewProvider(fauxProvider{
+	prov, _ := NewProviders(fauxProvider{
 		model: Model{ID: "m"},
 		reply: func(req Request) AssistantMessage {
 			calls++
@@ -105,7 +105,7 @@ func TestRunWithToolCall(t *testing.T) {
 		},
 	})
 
-	d, _ := New(Options{Provider: prov, Model: "m", Tools: []AnyTool{echo}})
+	d, _ := New(Options{Providers: prov, Model: "m", Tools: []AnyTool{echo}})
 	defer d.Close()
 
 	msg, err := d.Run(context.Background(), "call echo")

@@ -7,10 +7,10 @@ import (
 )
 
 // toolThenStop builds a provider that calls the named tool once, then stops.
-func toolThenStop(t *testing.T, toolName string) Provider {
+func toolThenStop(t *testing.T, toolName string) Providers {
 	t.Helper()
 	calls := 0
-	prov, err := NewProvider(fauxProvider{
+	prov, err := NewProviders(fauxProvider{
 		model: Model{ID: "m"},
 		reply: func(req Request) AssistantMessage {
 			calls++
@@ -42,9 +42,9 @@ func echoTool(name string, ran *bool) AnyTool {
 func TestBeforeToolCallBlocks(t *testing.T) {
 	var ran bool
 	d, _ := New(Options{
-		Provider: toolThenStop(t, "act"),
-		Model:    "m",
-		Tools:    []AnyTool{echoTool("act", &ran)},
+		Providers: toolThenStop(t, "act"),
+		Model:     "m",
+		Tools:     []AnyTool{echoTool("act", &ran)},
 		BeforeToolCall: func(_ context.Context, in BeforeToolContext) (BeforeToolResult, error) {
 			return BeforeToolResult{Block: true, Reason: "nope"}, nil
 		},
@@ -67,9 +67,9 @@ func TestBeforeToolCallShortCircuits(t *testing.T) {
 	var ran bool
 	cached := ToolText("cached result")
 	d, _ := New(Options{
-		Provider: toolThenStop(t, "act"),
-		Model:    "m",
-		Tools:    []AnyTool{echoTool("act", &ran)},
+		Providers: toolThenStop(t, "act"),
+		Model:     "m",
+		Tools:     []AnyTool{echoTool("act", &ran)},
 		BeforeToolCall: func(_ context.Context, in BeforeToolContext) (BeforeToolResult, error) {
 			return BeforeToolResult{Result: &cached}, nil
 		},
@@ -90,9 +90,9 @@ func TestBeforeToolCallShortCircuits(t *testing.T) {
 func TestAfterToolCallRewrites(t *testing.T) {
 	var ran bool
 	d, _ := New(Options{
-		Provider: toolThenStop(t, "act"),
-		Model:    "m",
-		Tools:    []AnyTool{echoTool("act", &ran)},
+		Providers: toolThenStop(t, "act"),
+		Model:     "m",
+		Tools:     []AnyTool{echoTool("act", &ran)},
 		AfterToolCall: func(_ context.Context, in AfterToolContext) (*ToolResult, error) {
 			r := ToolText("rewritten from: " + textOfContent(in.Result.Content))
 			return &r, nil
@@ -114,9 +114,9 @@ func TestAfterToolCallRewrites(t *testing.T) {
 func TestHookErrorDegradesToErrorResult(t *testing.T) {
 	var ran bool
 	d, _ := New(Options{
-		Provider: toolThenStop(t, "act"),
-		Model:    "m",
-		Tools:    []AnyTool{echoTool("act", &ran)},
+		Providers: toolThenStop(t, "act"),
+		Model:     "m",
+		Tools:     []AnyTool{echoTool("act", &ran)},
 		BeforeToolCall: func(_ context.Context, in BeforeToolContext) (BeforeToolResult, error) {
 			return BeforeToolResult{}, fmt.Errorf("hook boom")
 		},
