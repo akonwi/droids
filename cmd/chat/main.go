@@ -18,8 +18,9 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
-	"time"
+	"sync"
 
 	"github.com/akonwi/droids"
 )
@@ -44,19 +45,11 @@ func main() {
 		fatal(err)
 	}
 
-	clock := droids.NewTool(droids.Tool[struct{}]{
-		Name:        "get_time",
-		Description: "Get the current server time (RFC3339).",
-		Execute: func(_ context.Context, _ struct{}) (droids.ToolResult, error) {
-			return droids.ToolText(time.Now().Format(time.RFC3339)), nil
-		},
-	})
-
 	d, err := droids.New(droids.Options{
 		Provider:     provider,
 		Model:        model,
-		SystemPrompt: "You are a helpful, concise CLI assistant.",
-		Tools:        []droids.AnyTool{clock},
+		SystemPrompt: "You are a helpful, concise CLI assistant with read-only filesystem access. Use the tools to inspect files and directories.",
+		Tools:        fsTools(),
 	})
 	if err != nil {
 		fatal(err)
@@ -143,4 +136,105 @@ func render(events <-chan droids.Event, turnDone chan<- struct{}) {
 func fatal(err error) {
 	fmt.Fprintln(os.Stderr, "error:", err)
 	os.Exit(1)
+}
+
+// workdir tracks the tools' current directory. read_file / list_files read it
+// concurrently (parallel batch); change_dir mutates it and is ModeSequential,
+// so the loop serializes any batch containing it. The RWMutex guards against a
+// stray concurrent read regardless.
+type workdir struct {
+	mu  sync.RWMutex
+	cwd string
+}
+
+func (w *workdir) get() string {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	return w.cwd
+}
+
+// resolve joins a possibly-relative path against the current directory.
+func (w *workdir) resolve(p string) string {
+	if filepath.IsAbs(p) {
+		return filepath.Clean(p)
+	}
+	return filepath.Join(w.get(), p)
+}
+
+type pathArg struct {
+	Path string `json:"path" jsonschema:"description=A file or directory path, absolute or relative to the current directory"`
+}
+
+// fsTools returns the read-only filesystem toolset.
+func fsTools() []droids.AnyTool {
+	start, err := os.Getwd()
+	if err != nil {
+		start = "."
+	}
+	wd := &workdir{cwd: start}
+
+	readFile := droids.NewTool(droids.Tool[pathArg]{
+		Name:        "read_file",
+		Description: "Read and return the contents of a text file.",
+		Execute: func(_ context.Context, args pathArg) (droids.ToolResult, error) {
+			if args.Path == "" {
+				return droids.ToolResult{}, fmt.Errorf("path is required")
+			}
+			data, err := os.ReadFile(wd.resolve(args.Path))
+			if err != nil {
+				return droids.ToolResult{}, err
+			}
+			return droids.ToolText(string(data)), nil
+		},
+	})
+
+	listFiles := droids.NewTool(droids.Tool[pathArg]{
+		Name:        "list_files",
+		Description: "List the entries in a directory (like ls). Empty path lists the current directory.",
+		Execute: func(_ context.Context, args pathArg) (droids.ToolResult, error) {
+			dir := wd.get()
+			if args.Path != "" {
+				dir = wd.resolve(args.Path)
+			}
+			entries, err := os.ReadDir(dir)
+			if err != nil {
+				return droids.ToolResult{}, err
+			}
+			var b strings.Builder
+			for _, e := range entries {
+				name := e.Name()
+				if e.IsDir() {
+					name += "/"
+				}
+				fmt.Fprintln(&b, name)
+			}
+			return droids.ToolText(b.String()), nil
+		},
+	})
+
+	changeDir := droids.NewTool(droids.Tool[pathArg]{
+		Name:        "change_dir",
+		Description: "Change the current working directory for subsequent tool calls (like cd).",
+		// Mutates shared state; force the batch to serialize.
+		Mode: droids.ModeSequential,
+		Execute: func(_ context.Context, args pathArg) (droids.ToolResult, error) {
+			if args.Path == "" {
+				return droids.ToolResult{}, fmt.Errorf("path is required")
+			}
+			target := wd.resolve(args.Path)
+			info, err := os.Stat(target)
+			if err != nil {
+				return droids.ToolResult{}, err
+			}
+			if !info.IsDir() {
+				return droids.ToolResult{}, fmt.Errorf("%s is not a directory", target)
+			}
+			wd.mu.Lock()
+			wd.cwd = target
+			wd.mu.Unlock()
+			return droids.ToolText("cwd is now " + target), nil
+		},
+	})
+
+	return []droids.AnyTool{readFile, listFiles, changeDir}
 }
