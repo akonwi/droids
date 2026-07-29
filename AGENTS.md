@@ -30,6 +30,8 @@ and grows outward.
 | `stream.go` | Provider streaming contract: `Request`, `StreamEvent`, `Stream`. |
 | `provider.go` | `Providers` registry + `NewProviders` (routes by model); `Provider` config interface. |
 | `provider_openai.go` | OpenAI-compatible provider, backed by `openai-go`. |
+| `provider_anthropic.go` | Anthropic Messages provider, backed by `anthropic-sdk-go`. |
+| `provider_cloudflare.go` | Cloudflare AI Gateway decorator over OpenAI/Anthropic configs. |
 | `tool.go` | Generic `Tool[Args]` + `NewTool` erasing to `AnyTool`. |
 | `storage.go` | `Storage` seam + `MemoryStorage` (the default). |
 | `event.go` | Agent-level `Event` union emitted by `Droid.Events()`. |
