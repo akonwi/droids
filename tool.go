@@ -3,6 +3,8 @@ package droids
 import (
 	"context"
 	"encoding/json"
+
+	"github.com/invopop/jsonschema"
 )
 
 // tool.go — typed tools. Authors write a generic Tool[Args] with a strongly
@@ -27,8 +29,9 @@ func ToolText(text string) ToolResult {
 type Tool[Args any] struct {
 	Name        string
 	Description string
-	// Parameters is the JSON Schema for Args. If nil, a minimal object schema
-	// is used (schema derivation from Args is a future enhancement).
+	// Parameters is the JSON Schema for Args. If nil, it is derived from Args
+	// via reflection (json / jsonschema struct tags). Set it explicitly to
+	// override derivation.
 	Parameters map[string]any
 	// Execute runs the tool with decoded arguments. Return an error to signal
 	// failure; the loop converts it into an error tool result.
@@ -62,13 +65,45 @@ type boundTool[Args any] struct{ t Tool[Args] }
 func (b boundTool[Args]) schema() ToolSchema {
 	params := b.t.Parameters
 	if params == nil {
-		params = map[string]any{"type": "object", "properties": map[string]any{}}
+		params = deriveSchema[Args]()
 	}
 	return ToolSchema{
 		Name:        b.t.Name,
 		Description: b.t.Description,
 		Parameters:  params,
 	}
+}
+
+// deriveSchema reflects Args into a flat JSON Schema object suitable for a
+// provider tool definition. Definitions are inlined (no $ref/$defs) and the
+// $schema meta key is dropped, since providers expect a plain object schema.
+func deriveSchema[Args any]() map[string]any {
+	reflector := jsonschema.Reflector{
+		DoNotReference: true, // inline everything; providers reject $ref
+		ExpandedStruct: true, // top level is the object itself
+	}
+	var zero Args
+	schema := reflector.Reflect(zero)
+
+	raw, err := json.Marshal(schema)
+	if err != nil {
+		return emptyObjectSchema()
+	}
+	var out map[string]any
+	if err := json.Unmarshal(raw, &out); err != nil || out == nil {
+		return emptyObjectSchema()
+	}
+	delete(out, "$schema")
+	delete(out, "$id")
+	if _, ok := out["type"]; !ok {
+		// Non-struct Args (e.g. struct{}) may not reflect to an object.
+		return emptyObjectSchema()
+	}
+	return out
+}
+
+func emptyObjectSchema() map[string]any {
+	return map[string]any{"type": "object", "properties": map[string]any{}}
 }
 
 func (b boundTool[Args]) mode() ExecutionMode { return b.t.Mode }

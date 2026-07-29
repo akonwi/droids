@@ -3,6 +3,8 @@
 Deferred work. The seams exist today; these fill them in. See `VISION.md` for
 the architecture.
 
+Delete items once they are done — this file tracks only outstanding work.
+
 ## Providers
 - [ ] Additional providers (Anthropic, Google, …) — `Provider` is an interface,
       so they slot in without core changes.
@@ -12,10 +14,6 @@ the architecture.
 ## Loop
 - [ ] Parallel tool execution (loop runs tools sequentially today).
 - [ ] `before` / `after` tool hooks.
-
-## Tools
-- [ ] JSON-Schema derivation from `Tool[Args]` (currently hand-written
-      `Parameters`).
 
 ## Durable runtime (belongs in the runtime that wraps `droids`)
 - [ ] Idempotency for tool side effects.

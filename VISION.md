@@ -76,8 +76,8 @@ for ev := range d.Events() {
   one-shot callers need not drain events.
 - **Tools are generic** (`Tool[Args]`) with a typed `Execute`, erased into
   `AnyTool` via `NewTool`. Arguments are JSON-decoded into `Args` before the
-  call. (JSON-Schema derivation from `Args` is a future enhancement; supply
-  `Parameters` explicitly for now.)
+  call, and the tool's JSON Schema is derived from `Args` by reflection (set
+  `Parameters` explicitly to override).
 - **Providers are a registry.** `NewProvider(...ProviderConfig)` composes
   configs into one routing `Provider` that dispatches by the model's owning
   provider. Model ids resolve bare, or namespaced (`"provider/model"`) to
