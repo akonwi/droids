@@ -97,9 +97,4 @@ OPENAI_API_KEY=sk-... go test -tags live -run TestLive -v ./...
 
 ## Deferred work (define the seam now, implement later)
 
-- JSON-Schema derivation from `Tool[Args]` (currently hand-written `Parameters`).
-- Parallel tool execution + `before`/`after` tool hooks (loop is sequential).
-- OAuth / credential-store flows (api-key + headers only today).
-- Additional providers (Anthropic, Google, …).
-- A Postgres `Storage` for durable server runs; idempotency, per-user
-  concurrency, and leasing belong in the runtime that wraps `droids`.
+Tracked as a checklist in `BACKLOG.md`.

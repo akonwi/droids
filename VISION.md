@@ -97,26 +97,3 @@ provider-neutral. Providers translate to/from their wire format at the edge;
 the loop and storage only ever see these types. `Provider.Stream` emits a
 `StreamEvent` protocol (start / deltas / done / error) that assembles into one
 `AssistantMessage`; the loop re-emits higher-level agent `Event`s.
-
-## Status
-
-- ✅ Core types, event union, provider registry, generic tools, storage seam,
-  bounded loop with steering/follow-up/abort, in-memory storage.
-- ✅ `Droid` facade: `New`, `Run`, `Send`, `Steer`, `Abort`, `Events`, `Close`.
-- ✅ **OpenAI provider** (`provider_openai.go`) — backed by the official
-  `openai-go` SDK: message/tool translation, streaming text + tool-call deltas,
-  reasoning effort, usage/cost, AI-Gateway-compatible (`BaseURL` + `Headers`).
-  A build-tagged live smoke test lives in `example_live_test.go`
-  (`go test -tags live`).
-
-## Deferred (define the seam now, implement later)
-
-- OAuth / credential-store flows (api-key + custom headers only for now — fits
-  AI Gateway).
-- Additional providers (Anthropic, Google, …) — `Provider` is an interface
-  from day one so they slot in.
-- Parallel tool execution and `before/after` tool hooks (loop runs tools
-  sequentially today).
-- Idempotency, per-user concurrency, leasing — these belong in the durable
-  runtime that wraps `droids`, layered on the `Storage` seam and event stream.
-- JSON-Schema derivation from `Tool[Args]`.
