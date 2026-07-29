@@ -12,6 +12,5 @@ Delete items once they are done — this file tracks only outstanding work.
       fits AI Gateway).
 
 ## Durable runtime (belongs in the runtime that wraps `droids`)
-- [ ] Idempotency for tool side effects.
 - [ ] Per-user concurrency control.
 - [ ] Leasing / recovery across process restarts.
