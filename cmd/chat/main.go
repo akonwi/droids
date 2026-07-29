@@ -1,12 +1,13 @@
 // Command chat is a minimal CLI REPL for exercising droids against a real
-// OpenAI-compatible endpoint.
+// provider.
 //
 //	OPENAI_API_KEY=sk-... go run ./cmd/chat
+//	ANTHROPIC_API_KEY=sk-... go run ./cmd/chat
 //
 // Optional environment:
 //
-//	DROIDS_BASE_URL  route through an AI Gateway / compatible provider
-//	DROIDS_MODEL     model id (default: gpt-4o-mini)
+//	DROIDS_BASE_URL  route OpenAI through an AI Gateway / compatible provider
+//	DROIDS_MODEL     model id (defaults per provider)
 //
 // Type a message and press enter. Ctrl-C aborts the in-flight turn; Ctrl-D
 // (EOF) or "exit" quits.
@@ -26,21 +27,11 @@ import (
 )
 
 func main() {
-	apiKey := os.Getenv("OPENAI_API_KEY")
-	if apiKey == "" {
-		fmt.Fprintln(os.Stderr, "set OPENAI_API_KEY")
-		os.Exit(1)
+	provider, model, err := selectProvider()
+	if err != nil {
+		fatal(err)
 	}
-	model := os.Getenv("DROIDS_MODEL")
-	if model == "" {
-		model = "gpt-4o-mini"
-	}
-
-	providers, err := droids.NewProviders(droids.OpenAI{
-		APIKey:  apiKey,
-		BaseURL: os.Getenv("DROIDS_BASE_URL"),
-		Models:  []droids.Model{{ID: model, MaxTokens: 1024}},
-	})
+	providers, err := droids.NewProviders(provider)
 	if err != nil {
 		fatal(err)
 	}
@@ -131,6 +122,33 @@ func render(events <-chan droids.Event, turnDone chan<- struct{}) {
 			}
 		}
 	}
+}
+
+// selectProvider picks a provider from the environment. ANTHROPIC_API_KEY
+// selects Anthropic; otherwise OPENAI_API_KEY selects OpenAI (BaseURL routes
+// through an AI Gateway). DROIDS_MODEL overrides the model id.
+func selectProvider() (droids.Provider, string, error) {
+	model := os.Getenv("DROIDS_MODEL")
+	if key := os.Getenv("ANTHROPIC_API_KEY"); key != "" {
+		if model == "" {
+			model = "claude-3-5-haiku-latest"
+		}
+		return droids.Anthropic{
+			APIKey: key,
+			Models: []droids.Model{{ID: model, MaxTokens: 1024}},
+		}, model, nil
+	}
+	if key := os.Getenv("OPENAI_API_KEY"); key != "" {
+		if model == "" {
+			model = "gpt-4o-mini"
+		}
+		return droids.OpenAI{
+			APIKey:  key,
+			BaseURL: os.Getenv("DROIDS_BASE_URL"),
+			Models:  []droids.Model{{ID: model, MaxTokens: 1024}},
+		}, model, nil
+	}
+	return nil, "", fmt.Errorf("set OPENAI_API_KEY or ANTHROPIC_API_KEY")
 }
 
 func fatal(err error) {
