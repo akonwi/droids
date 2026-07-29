@@ -20,6 +20,33 @@ type ToolResult struct {
 	Details any
 }
 
+// BeforeToolContext is passed to a BeforeToolCall hook.
+type BeforeToolContext struct {
+	ToolCall ToolCall
+	// Args is the raw JSON arguments the model produced.
+	Args []byte
+}
+
+// BeforeToolResult is returned by a BeforeToolCall hook. Zero value = proceed.
+type BeforeToolResult struct {
+	// Block prevents execution; an error tool result (Reason) is returned to
+	// the model instead.
+	Block bool
+	// Reason is the error text when Block is set. Defaults to a generic message.
+	Reason string
+	// Result short-circuits execution: when non-nil (and not blocked), the
+	// tool is skipped and this result is used as-is. The idempotency primitive
+	// — return a previously stored result keyed by ToolCall.ID.
+	Result *ToolResult
+}
+
+// AfterToolContext is passed to an AfterToolCall hook.
+type AfterToolContext struct {
+	ToolCall ToolCall
+	Result   ToolResult
+	IsError  bool
+}
+
 // ToolText is a convenience for a text-only tool result.
 func ToolText(text string) ToolResult {
 	return ToolResult{Content: []Content{TextContent{Text: text}}}

@@ -12,8 +12,8 @@ Delete items once they are done — this file tracks only outstanding work.
       fits AI Gateway).
 
 ## Loop
-- [ ] Parallel tool execution (loop runs tools sequentially today).
-- [ ] `before` / `after` tool hooks.
+- [ ] Parallel tool execution (loop runs tools sequentially today). Revisit
+      the ordering contract for `before`/`after` hooks when this lands.
 
 ## Durable runtime (belongs in the runtime that wraps `droids`)
 - [ ] Idempotency for tool side effects.

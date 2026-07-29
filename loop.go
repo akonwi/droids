@@ -139,26 +139,14 @@ func (d *Droid) streamTurn(ctx context.Context) AssistantMessage {
 }
 
 // executeTools runs each tool call sequentially and returns the results.
-// Parallel execution and before/after hooks are future enhancements.
+// Parallel execution is a future enhancement; ordering guarantees will be
+// revisited then.
 func (d *Droid) executeTools(ctx context.Context, calls []ToolCall) []ToolResultMessage {
 	var out []ToolResultMessage
 	for _, call := range calls {
 		d.emit(ToolExecutionStart{ToolCallID: call.ID, ToolName: call.Name, Arguments: call.Arguments})
 
-		var (
-			result  ToolResult
-			isError bool
-		)
-		tool, ok := d.tools[call.Name]
-		if !ok {
-			result = ToolText(fmt.Sprintf("Tool %q not found", call.Name))
-			isError = true
-		} else if r, err := tool.execute(ctx, call.Arguments); err != nil {
-			result = ToolText(err.Error())
-			isError = true
-		} else {
-			result = r
-		}
+		result, isError := d.runToolCall(ctx, call)
 
 		d.emit(ToolExecutionEnd{ToolCallID: call.ID, ToolName: call.Name, Result: result, IsError: isError})
 
@@ -180,6 +168,54 @@ func (d *Droid) executeTools(ctx context.Context, calls []ToolCall) []ToolResult
 		}
 	}
 	return out
+}
+
+// runToolCall applies the before hook (block / short-circuit), executes the
+// tool if not skipped, then applies the after hook. Hook errors degrade to an
+// error result rather than crashing the loop.
+func (d *Droid) runToolCall(ctx context.Context, call ToolCall) (ToolResult, bool) {
+	if d.opts.BeforeToolCall != nil {
+		br, err := d.opts.BeforeToolCall(ctx, BeforeToolContext{ToolCall: call, Args: call.Arguments})
+		switch {
+		case err != nil:
+			return ToolText(err.Error()), true
+		case br.Block:
+			reason := br.Reason
+			if reason == "" {
+				reason = "Tool execution was blocked"
+			}
+			return ToolText(reason), true
+		case br.Result != nil:
+			// Short-circuit: skip execution and the after hook.
+			return *br.Result, false
+		}
+	}
+
+	result, isError := d.executeTool(ctx, call)
+
+	if d.opts.AfterToolCall != nil {
+		replacement, err := d.opts.AfterToolCall(ctx, AfterToolContext{ToolCall: call, Result: result, IsError: isError})
+		if err != nil {
+			return ToolText(err.Error()), true
+		}
+		if replacement != nil {
+			return *replacement, isError
+		}
+	}
+	return result, isError
+}
+
+// executeTool looks up and runs a single tool.
+func (d *Droid) executeTool(ctx context.Context, call ToolCall) (ToolResult, bool) {
+	tool, ok := d.tools[call.Name]
+	if !ok {
+		return ToolText(fmt.Sprintf("Tool %q not found", call.Name)), true
+	}
+	r, err := tool.execute(ctx, call.Arguments)
+	if err != nil {
+		return ToolText(err.Error()), true
+	}
+	return r, false
 }
 
 // --- transcript + steering helpers (mutex-guarded) ---

@@ -31,6 +31,17 @@ type Options struct {
 	MaxSteps int
 	// Reasoning selects a default thinking level for turns.
 	Reasoning string
+
+	// BeforeToolCall runs after arguments are decoded and before a tool
+	// executes. It can block the call, or short-circuit it with a cached
+	// result (idempotency). A returned error degrades to an error tool result;
+	// it never crashes the loop. Optional.
+	BeforeToolCall func(ctx context.Context, in BeforeToolContext) (BeforeToolResult, error)
+
+	// AfterToolCall runs after a tool executes and before its result is
+	// emitted/persisted. Return a non-nil result to replace it; nil leaves it
+	// unchanged. A returned error degrades to an error tool result. Optional.
+	AfterToolCall func(ctx context.Context, in AfterToolContext) (*ToolResult, error)
 }
 
 // Droid is a live agent session.
