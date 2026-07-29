@@ -6,7 +6,7 @@ the architecture.
 Delete items once they are done — this file tracks only outstanding work.
 
 ## Providers
-- [ ] Additional providers (Anthropic, Google, …) — `Provider` is an interface,
-      so they slot in without core changes.
+- [ ] Additional providers (Google, …) — `Provider` is an interface, so they
+      slot in without core changes.
 - [ ] OAuth / credential-store flows (api-key + custom headers only today —
       fits AI Gateway).
