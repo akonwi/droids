@@ -20,7 +20,18 @@ func (d *Droid) worker() {
 			d.finishEvents()
 			return
 		case qp := <-d.queue:
-			msg := d.runPrompt(qp.messages)
+			// Reject work dequeued after Close won the earlier race, so a
+			// post-close prompt never mutates the transcript.
+			select {
+			case <-d.closed:
+				if qp.result != nil {
+					qp.result <- runResult{err: fmt.Errorf("droids: droid closed")}
+				}
+				d.finishEvents()
+				return
+			default:
+			}
+			msg := d.runPrompt(qp)
 			if qp.result != nil {
 				qp.result <- runResult{message: msg.message, err: msg.err}
 			}
@@ -37,18 +48,54 @@ func (d *Droid) finishEvents() {
 	d.eventsMu.Unlock()
 }
 
-// runPrompt executes one full agent run for the given seed messages.
-func (d *Droid) runPrompt(seed []Message) runResult {
-	ctx, cancel := context.WithCancel(context.Background())
+// runPrompt executes one full agent run for the given prompt. The run context
+// derives from the caller's ctx (Send/Run), so cancelling it aborts provider
+// calls and tool execution; Abort and Close cancel it too.
+func (d *Droid) runPrompt(qp queuedPrompt) runResult {
+	base := qp.ctx
+	if base == nil {
+		base = context.Background()
+	}
+	ctx, cancel := context.WithCancel(base)
 	d.mu.Lock()
 	d.cancelRun = cancel
 	d.mu.Unlock()
+
+	// Cancel the run when the droid is closed. The watcher exits when the run
+	// finishes (stop) or the droid closes.
+	stop := make(chan struct{})
+	go func() {
+		select {
+		case <-d.closed:
+			cancel()
+		case <-stop:
+		}
+	}()
+
 	defer func() {
 		d.mu.Lock()
 		d.cancelRun = nil
 		d.mu.Unlock()
 		cancel()
+		close(stop)
 	}()
+
+	seed := qp.messages
+
+	// If the prompt was cancelled while queued (caller ctx ended, or the droid
+	// closed), drop it without emitting events or mutating the transcript.
+	if err := ctx.Err(); err != nil {
+		return runResult{
+			message: AssistantMessage{
+				Provider:     d.model.Provider,
+				Model:        d.model.ID,
+				StopReason:   StopReasonAborted,
+				ErrorMessage: err.Error(),
+				Timestamp:    time.Now().UnixMilli(),
+			},
+			err: err,
+		}
+	}
 
 	d.emit(AgentStart{})
 
@@ -61,6 +108,21 @@ func (d *Droid) runPrompt(seed []Message) runResult {
 
 	var last AssistantMessage
 	for step := 0; step < d.opts.MaxSteps; step++ {
+		// Stop promptly if the run was cancelled (caller ctx, Abort, or Close)
+		// rather than starting another turn.
+		if err := ctx.Err(); err != nil {
+			aborted := AssistantMessage{
+				Provider:     d.model.Provider,
+				Model:        d.model.ID,
+				StopReason:   StopReasonAborted,
+				ErrorMessage: err.Error(),
+				Timestamp:    time.Now().UnixMilli(),
+			}
+			d.emit(ErrorEvent{Message: aborted, Aborted: true})
+			d.emit(AgentEnd{Messages: d.snapshot()})
+			return runResult{message: aborted, err: err}
+		}
+
 		d.emit(TurnStart{})
 
 		// Drain steering messages before the turn.
@@ -77,6 +139,11 @@ func (d *Droid) runPrompt(seed []Message) runResult {
 			d.emit(TurnEnd{Message: msg})
 			d.emit(ErrorEvent{Message: msg, Aborted: msg.StopReason == StopReasonAborted})
 			d.emit(AgentEnd{Messages: d.snapshot()})
+			// Preserve cancellation error identity (errors.Is) when the abort
+			// was caused by the run context ending.
+			if msg.StopReason == StopReasonAborted && ctx.Err() != nil {
+				return runResult{message: msg, err: ctx.Err()}
+			}
 			return runResult{message: msg, err: fmt.Errorf("%s", errText(msg))}
 		}
 
@@ -312,12 +379,22 @@ func (d *Droid) executeTool(ctx context.Context, call ToolCall) (ToolResult, boo
 
 // --- transcript + steering helpers (mutex-guarded) ---
 
+// persistTimeout bounds a best-effort Storage.Append that is detached from run
+// cancellation, so a stuck store cannot wedge the worker forever.
+const persistTimeout = 30 * time.Second
+
 func (d *Droid) appendMessage(ctx context.Context, m Message) {
 	d.mu.Lock()
 	d.transcript = append(d.transcript, m)
 	d.mu.Unlock()
-	// Best-effort durability; a failing store must not crash the loop.
-	_ = d.opts.Storage.Append(ctx, d.opts.Session, m)
+	// Persistence is independent of run cancellation: a message that completed
+	// must be durably recorded even if the caller cancelled or the run was
+	// aborted, so the transcript and storage stay consistent. Detach from the
+	// run context but keep a bound so a hung store cannot block the worker.
+	// Best-effort — a failing store must not crash the loop.
+	pctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), persistTimeout)
+	defer cancel()
+	_ = d.opts.Storage.Append(pctx, d.opts.Session, m)
 }
 
 func (d *Droid) snapshot() []Message {

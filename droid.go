@@ -74,6 +74,7 @@ type Droid struct {
 }
 
 type queuedPrompt struct {
+	ctx      context.Context
 	messages []Message
 	result   chan runResult
 }
@@ -156,8 +157,12 @@ func (d *Droid) emit(ev Event) {
 // is active the prompt is processed after it (a follow-up). Returns once the
 // prompt is enqueued, not when the run completes — use Events or Run to
 // observe progress.
-func (d *Droid) Send(_ context.Context, text string) error {
-	return d.enqueue(userText(text), nil)
+//
+// ctx bounds the resulting run: cancelling it (or its deadline elapsing) aborts
+// the run's provider calls and tool execution. For fire-and-forget work that
+// must outlive the calling scope, pass context.Background().
+func (d *Droid) Send(ctx context.Context, text string) error {
+	return d.enqueue(ctx, userText(text), nil)
 }
 
 // Run enqueues a prompt and blocks until its run completes, returning the final
@@ -165,7 +170,7 @@ func (d *Droid) Send(_ context.Context, text string) error {
 // consuming Events.
 func (d *Droid) Run(ctx context.Context, text string) (AssistantMessage, error) {
 	result := make(chan runResult, 1)
-	if err := d.enqueue(userText(text), result); err != nil {
+	if err := d.enqueue(ctx, userText(text), result); err != nil {
 		return AssistantMessage{}, err
 	}
 	select {
@@ -178,15 +183,23 @@ func (d *Droid) Run(ctx context.Context, text string) (AssistantMessage, error) 
 	}
 }
 
-func (d *Droid) enqueue(msg Message, result chan runResult) error {
+func (d *Droid) enqueue(ctx context.Context, msg Message, result chan runResult) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	select {
 	case <-d.closed:
 		return fmt.Errorf("droids: droid closed")
 	default:
 	}
 	select {
-	case d.queue <- queuedPrompt{messages: []Message{msg}, result: result}:
+	case d.queue <- queuedPrompt{ctx: ctx, messages: []Message{msg}, result: result}:
 		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	case <-d.closed:
 		return fmt.Errorf("droids: droid closed")
 	}
@@ -211,7 +224,8 @@ func (d *Droid) Abort() {
 	}
 }
 
-// Close shuts the droid down and closes the events channel. Idempotent.
+// Close shuts the droid down: it aborts any in-flight run and closes the events
+// channel. Idempotent.
 func (d *Droid) Close() {
 	d.closeOnce.Do(func() {
 		close(d.closed)
