@@ -86,6 +86,21 @@ type AssistantMessage struct {
 func (AssistantMessage) isMessage() {}
 func (AssistantMessage) Role() Role { return RoleAssistant }
 
+// Text returns the concatenated text content of the message (thinking and tool
+// calls excluded), with blocks joined by newlines.
+func (m AssistantMessage) Text() string {
+	var b []byte
+	for _, c := range m.Content {
+		if t, ok := c.(TextContent); ok {
+			if len(b) > 0 {
+				b = append(b, '\n')
+			}
+			b = append(b, t.Text...)
+		}
+	}
+	return string(b)
+}
+
 // ToolCalls returns the tool-call blocks in this message, in order.
 func (m AssistantMessage) ToolCalls() []ToolCall {
 	var calls []ToolCall

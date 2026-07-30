@@ -62,7 +62,7 @@ func TestRunSingleTurn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
-	if got := textOf(msg); got != "hello back" {
+	if got := msg.Text(); got != "hello back" {
 		t.Fatalf("got %q", got)
 	}
 
@@ -112,19 +112,10 @@ func TestRunWithToolCall(t *testing.T) {
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
-	if textOf(msg) != "done" {
-		t.Fatalf("got %q", textOf(msg))
+	if msg.Text() != "done" {
+		t.Fatalf("got %q", msg.Text())
 	}
 	if calls != 2 {
 		t.Fatalf("expected 2 model calls, got %d", calls)
 	}
-}
-
-func textOf(m AssistantMessage) string {
-	for _, c := range m.Content {
-		if t, ok := c.(TextContent); ok {
-			return t.Text
-		}
-	}
-	return ""
 }
