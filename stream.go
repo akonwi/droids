@@ -13,8 +13,9 @@ type Request struct {
 	Messages     []Message
 	Tools        []ToolSchema
 
-	// Reasoning selects a thinking level ("", "minimal", "low", "medium",
-	// "high", "xhigh"). Ignored by models without reasoning.
+	// Reasoning selects a thinking level. "" leaves the field unset (provider
+	// default); "none"/"off" explicitly disables reasoning; "minimal", "low",
+	// "medium", "high", "xhigh" request effort. Ignored by non-reasoning models.
 	Reasoning   string
 	Temperature *float64
 	MaxTokens   int

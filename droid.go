@@ -29,7 +29,8 @@ type Options struct {
 	Session string
 	// MaxSteps bounds the tool loop per run. Default: 16.
 	MaxSteps int
-	// Reasoning selects a default thinking level for turns.
+	// Reasoning selects a default thinking level for turns ("" = provider
+	// default, "none"/"off" = explicitly disabled, or "minimal"…"xhigh").
 	Reasoning string
 
 	// ToolExecution sets the default execution mode for a batch of tool calls

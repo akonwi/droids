@@ -287,6 +287,11 @@ func reasoningEffort(level string) shared.ReasoningEffort {
 		return shared.ReasoningEffort(level)
 	case "xhigh":
 		return shared.ReasoningEffortHigh
+	case "none", "off":
+		// Explicitly disable reasoning. Required for reasoning models that would
+		// otherwise apply a default effort, which some APIs reject alongside
+		// function tools on the chat-completions endpoint.
+		return shared.ReasoningEffort("none")
 	default:
 		return ""
 	}
