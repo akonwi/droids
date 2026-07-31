@@ -66,11 +66,12 @@ type Droid struct {
 	steering   []Message
 	cancelRun  context.CancelFunc
 
-	queue     chan queuedPrompt
-	eventsMu  sync.Mutex
-	events    chan Event
-	closeOnce sync.Once
-	closed    chan struct{}
+	queue        chan queuedPrompt
+	eventsMu     sync.Mutex
+	events       chan Event
+	eventsClosed bool
+	closeOnce    sync.Once
+	closed       chan struct{}
 }
 
 type queuedPrompt struct {
@@ -128,14 +129,19 @@ func New(opts Options) (*Droid, error) {
 }
 
 // Events returns the droid's long-lived event channel. The same channel is
-// returned on every call. It is created lazily: if you never call Events, the
-// loop runs without emitting live events (Storage persistence still happens).
-// The channel is closed when the droid is closed.
+// returned on every call, including after Close. It is created lazily: if you
+// never call Events, the loop runs without emitting live events (Storage
+// persistence still happens). The channel is closed once the droid finishes
+// shutting down (shortly after Close); ranging over it therefore terminates.
+// A first call after shutdown has completed returns an already-closed channel.
 func (d *Droid) Events() <-chan Event {
 	d.eventsMu.Lock()
 	defer d.eventsMu.Unlock()
 	if d.events == nil {
 		d.events = make(chan Event, 64)
+		if d.eventsClosed {
+			close(d.events)
+		}
 	}
 	return d.events
 }
@@ -143,8 +149,9 @@ func (d *Droid) Events() <-chan Event {
 func (d *Droid) emit(ev Event) {
 	d.eventsMu.Lock()
 	ch := d.events
+	closed := d.eventsClosed
 	d.eventsMu.Unlock()
-	if ch == nil {
+	if ch == nil || closed {
 		return
 	}
 	select {

@@ -39,11 +39,15 @@ func (d *Droid) worker() {
 	}
 }
 
+// finishEvents closes the event channel exactly once on shutdown. The channel
+// is kept (not niled) so Events() keeps returning the same, now-closed channel.
 func (d *Droid) finishEvents() {
 	d.eventsMu.Lock()
-	if d.events != nil {
-		close(d.events)
-		d.events = nil
+	if !d.eventsClosed {
+		d.eventsClosed = true
+		if d.events != nil {
+			close(d.events)
+		}
 	}
 	d.eventsMu.Unlock()
 }
