@@ -18,12 +18,15 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strings"
 	"sync"
 
 	"github.com/akonwi/droids"
+	droidsmcp "github.com/akonwi/droids/mcp"
+	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 func main() {
@@ -36,11 +39,29 @@ func main() {
 		fatal(err)
 	}
 
+	if _, err := exec.LookPath("npx"); err != nil {
+		fatal(fmt.Errorf("MCP everything server requires npx: %w", err))
+	}
+	mcpManager, err := droidsmcp.NewManager(droidsmcp.Server{
+		Name:        "everything",
+		Description: "Official MCP integration-test server with tools covering text, images, errors, annotations, and long-running operations",
+		Transport: func(context.Context) (sdkmcp.Transport, error) {
+			return &sdkmcp.CommandTransport{
+				Command: exec.Command("npx", "-y", "@modelcontextprotocol/server-everything"),
+			}, nil
+		},
+	})
+	if err != nil {
+		fatal(err)
+	}
+	defer mcpManager.Close()
+	tools := append(fsTools(), mcpManager.Tools()...)
+
 	d, err := droids.New(droids.Options{
 		Providers:    providers,
 		Model:        model,
-		SystemPrompt: "You are a helpful, concise CLI assistant with read-only filesystem access. Use the tools to inspect files and directories.",
-		Tools:        fsTools(),
+		SystemPrompt: "You are a helpful, concise CLI assistant with read-only filesystem access. Use MCP namespace tools progressively: list or search, describe unfamiliar tools, then call them.",
+		Tools:        tools,
 	})
 	if err != nil {
 		fatal(err)
@@ -61,7 +82,7 @@ func main() {
 	turnDone := make(chan struct{}, 1)
 	go render(d.Events(), turnDone)
 
-	fmt.Printf("droids chat — model %q. Ctrl-D to quit.\n", model)
+	fmt.Printf("droids chat — model %q, MCP namespace mcp_everything enabled. Ctrl-D to quit.\n", model)
 	in := bufio.NewScanner(os.Stdin)
 	in.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	for {

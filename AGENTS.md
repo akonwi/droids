@@ -33,6 +33,7 @@ and grows outward.
 | `provider_anthropic.go` | Anthropic Messages provider, backed by `anthropic-sdk-go`. |
 | `provider_cloudflare.go` | Cloudflare AI Gateway decorator over OpenAI/Anthropic configs. |
 | `tool.go` | Generic `Tool[Args]` + `NewTool` erasing to `AnyTool`. |
+| `mcp/` | Optional progressive-disclosure adapter for MCP tool namespaces. |
 | `storage.go` | `Storage` seam + `MemoryStorage` (the default). |
 | `event.go` | Agent-level `Event` union emitted by `Droid.Events()`. |
 | `droid.go` | The `Droid` facade: `New`, `Run`, `Send`, `Steer`, `Abort`, `Events`, `Close`. |

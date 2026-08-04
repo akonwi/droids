@@ -50,7 +50,8 @@ type Options struct {
 
 	// AfterToolCall runs after a tool executes and before its result is
 	// emitted/persisted. Return a non-nil result to replace it; nil leaves it
-	// unchanged. A returned error degrades to an error tool result. Optional.
+	// unchanged. A replacement's IsError becomes the final error status. A
+	// returned Go error degrades to an error tool result. Optional.
 	AfterToolCall func(ctx context.Context, in AfterToolContext) (*ToolResult, error)
 }
 
@@ -113,7 +114,14 @@ func New(opts Options) (*Droid, error) {
 		closed:    make(chan struct{}),
 	}
 	for _, t := range opts.Tools {
-		d.tools[t.schema().Name] = t
+		schema := t.schema()
+		if schema.Name == "" {
+			return nil, fmt.Errorf("droids: tool name is required")
+		}
+		if _, exists := d.tools[schema.Name]; exists {
+			return nil, fmt.Errorf("droids: duplicate tool name %q", schema.Name)
+		}
+		d.tools[schema.Name] = t
 	}
 
 	{

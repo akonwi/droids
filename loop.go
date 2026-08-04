@@ -339,16 +339,16 @@ func (d *Droid) beforeTool(ctx context.Context, call ToolCall) (oc toolOutcome, 
 	br, err := d.opts.BeforeToolCall(ctx, BeforeToolContext{ToolCall: call, Args: call.Arguments})
 	switch {
 	case err != nil:
-		return toolOutcome{result: ToolText(err.Error()), isError: true}, false
+		return toolOutcome{result: toolErrorText(err.Error()), isError: true}, false
 	case br.Block:
 		reason := br.Reason
 		if reason == "" {
 			reason = "Tool execution was blocked"
 		}
-		return toolOutcome{result: ToolText(reason), isError: true}, false
+		return toolOutcome{result: toolErrorText(reason), isError: true}, false
 	case br.Result != nil:
 		// Short-circuit: skip execution and the after hook.
-		return toolOutcome{result: *br.Result}, false
+		return toolOutcome{result: *br.Result, isError: br.Result.IsError}, false
 	}
 	return toolOutcome{}, true
 }
@@ -359,10 +359,10 @@ func (d *Droid) executeAndAfter(ctx context.Context, call ToolCall) (ToolResult,
 	if d.opts.AfterToolCall != nil {
 		replacement, err := d.opts.AfterToolCall(ctx, AfterToolContext{ToolCall: call, Result: result, IsError: isError})
 		if err != nil {
-			return ToolText(err.Error()), true
+			return toolErrorText(err.Error()), true
 		}
 		if replacement != nil {
-			return *replacement, isError
+			return *replacement, replacement.IsError
 		}
 	}
 	return result, isError
@@ -372,13 +372,19 @@ func (d *Droid) executeAndAfter(ctx context.Context, call ToolCall) (ToolResult,
 func (d *Droid) executeTool(ctx context.Context, call ToolCall) (ToolResult, bool) {
 	tool, ok := d.tools[call.Name]
 	if !ok {
-		return ToolText(fmt.Sprintf("Tool %q not found", call.Name)), true
+		return toolErrorText(fmt.Sprintf("Tool %q not found", call.Name)), true
 	}
 	r, err := tool.execute(ctx, call.Arguments)
 	if err != nil {
-		return ToolText(err.Error()), true
+		return toolErrorText(err.Error()), true
 	}
-	return r, false
+	return r, r.IsError
+}
+
+func toolErrorText(text string) ToolResult {
+	result := ToolText(text)
+	result.IsError = true
+	return result
 }
 
 // --- transcript + steering helpers (mutex-guarded) ---

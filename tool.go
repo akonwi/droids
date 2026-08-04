@@ -18,6 +18,10 @@ type ToolResult struct {
 	// Details is arbitrary structured data for logs/UI, persisted with the
 	// tool result but not sent to the model.
 	Details any
+	// IsError marks a completed tool result as an application-level failure while
+	// preserving its content and details for the model and observers. Returning a
+	// Go error remains appropriate for execution/transport failures.
+	IsError bool
 }
 
 // BeforeToolContext is passed to a BeforeToolCall hook.

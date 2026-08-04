@@ -63,6 +63,34 @@ func TestBeforeToolCallBlocks(t *testing.T) {
 	}
 }
 
+func TestToolResultCanMarkApplicationError(t *testing.T) {
+	d, err := New(Options{
+		Providers: toolThenStop(t, "act"),
+		Model:     "m",
+		Tools: []AnyTool{NewTool(Tool[struct{}]{
+			Name: "act",
+			Execute: func(context.Context, struct{}) (ToolResult, error) {
+				result := ToolText("remote tool rejected the request")
+				result.IsError = true
+				result.Details = map[string]any{"code": "rejected"}
+				return result, nil
+			},
+		})},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+
+	if _, err := d.Run(context.Background(), "go"); err != nil {
+		t.Fatal(err)
+	}
+	last := lastToolResult(t, d)
+	if !last.IsError || textOfContent(last.Content) != "remote tool rejected the request" {
+		t.Fatalf("application error result was not preserved: %+v", last)
+	}
+}
+
 func TestBeforeToolCallShortCircuits(t *testing.T) {
 	var ran bool
 	cached := ToolText("cached result")
@@ -84,6 +112,33 @@ func TestBeforeToolCallShortCircuits(t *testing.T) {
 	}
 	if got := textOfContent(lastToolResult(t, d).Content); got != "cached result" {
 		t.Fatalf("got %q", got)
+	}
+}
+
+func TestAfterToolCallIdentityPreservesExecutionError(t *testing.T) {
+	d, err := New(Options{
+		Providers: toolThenStop(t, "act"),
+		Model:     "m",
+		Tools: []AnyTool{NewTool(Tool[struct{}]{
+			Name: "act",
+			Execute: func(context.Context, struct{}) (ToolResult, error) {
+				return ToolResult{}, fmt.Errorf("failed")
+			},
+		})},
+		AfterToolCall: func(_ context.Context, in AfterToolContext) (*ToolResult, error) {
+			return &in.Result, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+
+	if _, err := d.Run(context.Background(), "go"); err != nil {
+		t.Fatal(err)
+	}
+	if result := lastToolResult(t, d); !result.IsError || textOfContent(result.Content) != "failed" {
+		t.Fatalf("execution error was not preserved: %+v", result)
 	}
 }
 
