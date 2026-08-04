@@ -146,7 +146,45 @@ read := droids.NewTool(droids.Tool[Args]{
 Batches of tool calls execute in **parallel** by default; mark a tool
 `Mode: droids.ModeSequential` (or set `Options.ToolExecution`) to serialize.
 Tool results are always appended to the transcript in the model's requested
-order, while live events fire in completion order.
+order, while live events fire in completion order. Set `ToolResult.IsError` for
+an application-level failure whose content and details should still be
+preserved for the model and observers.
+
+### MCP namespaces
+
+The optional `github.com/akonwi/droids/mcp` package exposes each configured MCP
+server as one progressively disclosed namespace tool. The model initially sees
+small tools such as `mcp_github` rather than every remote schema, then uses
+`list`, `search`, `describe`, and `call` within the chosen namespace.
+Connections and tool metadata are loaded lazily.
+
+```go
+manager, err := droidsmcp.NewManager(droidsmcp.Server{
+	Name:        "github",
+	Description: "GitHub repositories, issues, and pull requests",
+	Transport: func(ctx context.Context) (sdkmcp.Transport, error) {
+		return &sdkmcp.StreamableClientTransport{
+			Endpoint:     "https://example.com/mcp",
+			OAuthHandler: oauthHandler, // configured and persisted by the application
+		}, nil
+	},
+})
+if err != nil {
+	panic(err)
+}
+defer manager.Close()
+
+d, err := droids.New(droids.Options{
+	Providers: providers,
+	Model:     "gpt-4o-mini",
+	Tools:     append(localTools, manager.Tools()...),
+})
+```
+
+The package uses the official MCP Go SDK and accepts any SDK transport. MCP
+transports are single-use, so `Server.Transport` is a factory. OAuth browser
+interaction and credential persistence remain application-owned; provide a
+configured SDK `OAuthHandler` through the transport factory.
 
 ### Hooks
 
@@ -221,6 +259,11 @@ A CLI chat REPL with read-only filesystem tools lives in
 OPENAI_API_KEY=sk-...    go run ./cmd/chat
 ANTHROPIC_API_KEY=sk-... go run ./cmd/chat
 ```
+
+The chat example includes the official MCP everything test server and requires
+Node.js with `npx`. Try: `Search the everything MCP namespace for an echo tool,
+describe it, then call it with hello from droids.` The server starts lazily on
+the first namespace operation and exits when chat closes.
 
 ## License
 

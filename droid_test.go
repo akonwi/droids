@@ -2,6 +2,7 @@ package droids
 
 import (
 	"context"
+	"strings"
 	"testing"
 )
 
@@ -69,6 +70,35 @@ func TestRunSingleTurn(t *testing.T) {
 	history, _ := store.Load(context.Background(), "s1")
 	if len(history) != 2 { // user + assistant
 		t.Fatalf("expected 2 persisted messages, got %d", len(history))
+	}
+}
+
+func TestNewRejectsDuplicateToolNames(t *testing.T) {
+	providers, err := NewProviders(fauxProvider{
+		model: Model{ID: "m"},
+		reply: func(Request) AssistantMessage {
+			return AssistantMessage{StopReason: StopReasonStop}
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tool := func() AnyTool {
+		return NewTool(Tool[struct{}]{
+			Name: "same",
+			Execute: func(context.Context, struct{}) (ToolResult, error) {
+				return ToolText("ok"), nil
+			},
+		})
+	}
+
+	_, err = New(Options{
+		Providers: providers,
+		Model:     "m",
+		Tools:     []AnyTool{tool(), tool()},
+	})
+	if err == nil || !strings.Contains(err.Error(), `duplicate tool name "same"`) {
+		t.Fatalf("New error = %v", err)
 	}
 }
 
