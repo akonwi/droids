@@ -49,7 +49,7 @@ d, _ := droids.New(droids.Options{
 })
 
 // one-shot (e.g. Inbox Triage): blocks, returns the final message
-msg, err := d.Run(ctx, "triage this email ...")
+msg, err := d.Execute(ctx, "triage this email ...")
 
 // streaming (e.g. conversational agent): long-lived event channel
 d.Send(ctx, "message ...")      // starts a turn, or a follow-up if busy
@@ -72,7 +72,7 @@ for ev := range d.Events() {
   self-contained payloads.
 - **`Events()` is one long-lived channel** per droid, created lazily. If you
   never call it, the loop still runs and still persists — live events are
-  purely for UI. `Run` observes completion via a private result channel, so
+  purely for UI. `Execute` observes completion via a private result channel, so
   one-shot callers need not drain events.
 - **Tools are generic** (`Tool[Args]`) with a typed `Execute`, erased into
   `AnyTool` via `NewTool`. Arguments are JSON-decoded into `Args` before the

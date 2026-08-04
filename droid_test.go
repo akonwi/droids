@@ -59,7 +59,7 @@ func TestRunSingleTurn(t *testing.T) {
 	}
 	defer d.Close()
 
-	msg, err := d.Run(context.Background(), "hi")
+	msg, err := d.Execute(context.Background(), "hi")
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -138,7 +138,7 @@ func TestRunWithToolCall(t *testing.T) {
 	d, _ := New(Options{Providers: prov, Model: "m", Tools: []AnyTool{echo}})
 	defer d.Close()
 
-	msg, err := d.Run(context.Background(), "call echo")
+	msg, err := d.Execute(context.Background(), "call echo")
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}

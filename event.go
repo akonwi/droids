@@ -1,7 +1,8 @@
 package droids
 
-// event.go — the agent-level event union emitted by Droid.Events(). This is
-// the public consumption surface (Layer 2 output). Sealed interface: consumers
+// event.go — the agent-level event union emitted by Droid.Events() and
+// Run.Events(). This is the public consumption surface (Layer 2 output).
+// Sealed interface: consumers
 // type-switch on concrete variants. A run produces:
 //
 //	AgentStart

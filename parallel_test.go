@@ -63,7 +63,7 @@ func TestParallelToolsRunConcurrently(t *testing.T) {
 	})
 	defer d.Close()
 
-	if _, err := d.Run(context.Background(), "go"); err != nil {
+	if _, err := d.Execute(context.Background(), "go"); err != nil {
 		t.Fatal(err)
 	}
 	if got := atomic.LoadInt32(&maxInFlight); got < 2 {
@@ -90,7 +90,7 @@ func TestParallelTranscriptIsSourceOrder(t *testing.T) {
 	})
 	defer d.Close()
 
-	if _, err := d.Run(context.Background(), "go"); err != nil {
+	if _, err := d.Execute(context.Background(), "go"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -133,7 +133,7 @@ func TestSequentialToolMForcesSerialBatch(t *testing.T) {
 	})
 	defer d.Close()
 
-	if _, err := d.Run(context.Background(), "go"); err != nil {
+	if _, err := d.Execute(context.Background(), "go"); err != nil {
 		t.Fatal(err)
 	}
 	if got := atomic.LoadInt32(&maxInFlight); got != 1 {

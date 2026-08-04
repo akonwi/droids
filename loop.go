@@ -17,24 +17,48 @@ func (d *Droid) worker() {
 	for {
 		select {
 		case <-d.closed:
-			d.finishEvents()
+			d.shutdownWorker()
 			return
 		case qp := <-d.queue:
 			// Reject work dequeued after Close won the earlier race, so a
 			// post-close prompt never mutates the transcript.
 			select {
 			case <-d.closed:
-				if qp.result != nil {
-					qp.result <- runResult{err: fmt.Errorf("droids: droid closed")}
-				}
-				d.finishEvents()
+				qp.complete(runResult{err: fmt.Errorf("droids: droid closed")})
+				d.shutdownWorker()
 				return
 			default:
 			}
-			msg := d.runPrompt(qp)
-			if qp.result != nil {
-				qp.result <- runResult{message: msg.message, err: msg.err}
+
+			if qp.stream != nil {
+				d.setActiveRun(qp.stream)
 			}
+			result := d.runPrompt(qp)
+			if qp.stream != nil {
+				d.setActiveRun(nil)
+			}
+			qp.complete(result)
+		}
+	}
+}
+
+// shutdownWorker completes queued per-run streams/results, then closes the
+// long-lived session event stream. Work racing concurrently with Close may
+// enqueue successfully, but never executes.
+func (d *Droid) shutdownWorker() {
+	// Holding queueMu while marking admission closed and draining guarantees
+	// no successful enqueue can land after the final empty check.
+	d.queueMu.Lock()
+	d.accepting = false
+	closed := runResult{err: fmt.Errorf("droids: droid closed")}
+	for {
+		select {
+		case qp := <-d.queue:
+			qp.complete(closed)
+		default:
+			d.queueMu.Unlock()
+			d.finishEvents()
+			return
 		}
 	}
 }

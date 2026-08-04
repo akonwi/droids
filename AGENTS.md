@@ -35,8 +35,9 @@ and grows outward.
 | `tool.go` | Generic `Tool[Args]` + `NewTool` erasing to `AnyTool`. |
 | `mcp/` | Optional progressive-disclosure adapter for MCP tool namespaces. |
 | `storage.go` | `Storage` seam + `MemoryStorage` (the default). |
-| `event.go` | Agent-level `Event` union emitted by `Droid.Events()`. |
-| `droid.go` | The `Droid` facade: `New`, `Run`, `Send`, `Steer`, `Abort`, `Events`, `Close`. |
+| `event.go` | Agent-level `Event` union emitted by session and per-run streams. |
+| `droid.go` | The `Droid` facade: `New`, `Execute`, `Stream`, `Send`, `Steer`, `Abort`, `Events`, `Close`. |
+| `run.go` | Per-run event stream and reusable final result. |
 | `loop.go` | The bounded tool loop that drives turns. |
 | `cmd/chat` | A CLI REPL example for manual testing. |
 | `*_test.go` | Tests. `example_live_test.go` is build-tagged `live`. |
@@ -48,15 +49,18 @@ and grows outward.
      → exactly one `StreamDone` **or** `StreamError`. Providers must encode
      failures as `StreamError` (with `StopReason` error/aborted), never as a
      returned Go error.
-   - `Event` (`event.go`) is the *agent* layer emitted by `Droid.Events()`. The
-     loop consumes `StreamEvent`s and re-emits higher-level `Event`s.
+   - `Event` (`event.go`) is the *agent* layer emitted by `Droid.Events()` or
+     `Run.Events()`. The loop consumes `StreamEvent`s and re-emits
+     higher-level `Event`s.
 2. **Sealed interfaces.** `Message`, `Content`, `StreamEvent`, and `Event` are
    sealed via unexported marker methods (`isMessage()`, `isContent()`, etc.).
    Add a variant by defining the struct and the marker method. Consumers
    type-switch on concrete types.
-3. **`Events()` is one long-lived channel per droid**, created lazily. If no one
-   calls `Events()`, the loop still runs and still persists. Never assume a
-   consumer exists; `emit` drops when there is none.
+3. **Two agent event scopes.** `Droid.Events()` is one long-lived channel per
+   droid, created lazily and closed only at shutdown. `Run.Events()` is scoped
+   to one run and closes when that run ends; those events are delivered
+   exclusively to the per-run stream. If neither is requested, the loop still
+   runs and persists.
 4. **Persistence is independent of the event channel.** The loop appends to
    `Storage` on every completed message regardless of whether events are being
    consumed. `Storage` defaults to `MemoryStorage`; it is never nil after `New`.

@@ -67,9 +67,12 @@ type Droid struct {
 	steering   []Message
 	cancelRun  context.CancelFunc
 
+	queueMu      sync.Mutex
+	accepting    bool
 	queue        chan queuedPrompt
 	eventsMu     sync.Mutex
 	events       chan Event
+	activeRun    *agentRun
 	eventsClosed bool
 	closeOnce    sync.Once
 	closed       chan struct{}
@@ -79,6 +82,7 @@ type queuedPrompt struct {
 	ctx      context.Context
 	messages []Message
 	result   chan runResult
+	stream   *agentRun
 }
 
 type runResult struct {
@@ -110,6 +114,7 @@ func New(opts Options) (*Droid, error) {
 		providers: opts.Providers,
 		model:     model,
 		tools:     map[string]AnyTool{},
+		accepting: true,
 		queue:     make(chan queuedPrompt, 64),
 		closed:    make(chan struct{}),
 	}
@@ -156,9 +161,16 @@ func (d *Droid) Events() <-chan Event {
 
 func (d *Droid) emit(ev Event) {
 	d.eventsMu.Lock()
+	// A Run owns events for its run. Bounded delivery applies backpressure and
+	// preserves terminal events even during Close.
+	stream := d.activeRun
 	ch := d.events
 	closed := d.eventsClosed
 	d.eventsMu.Unlock()
+	if stream != nil {
+		stream.emit(ev)
+		return
+	}
 	if ch == nil || closed {
 		return
 	}
@@ -168,24 +180,30 @@ func (d *Droid) emit(ev Event) {
 	}
 }
 
+func (d *Droid) setActiveRun(stream *agentRun) {
+	d.eventsMu.Lock()
+	d.activeRun = stream
+	d.eventsMu.Unlock()
+}
+
 // Send enqueues a user prompt. If the droid is idle it starts a run; if a run
 // is active the prompt is processed after it (a follow-up). Returns once the
-// prompt is enqueued, not when the run completes — use Events or Run to
-// observe progress.
+// prompt is enqueued, not when the run completes — use Events to observe
+// progress.
 //
 // ctx bounds the resulting run: cancelling it (or its deadline elapsing) aborts
 // the run's provider calls and tool execution. For fire-and-forget work that
 // must outlive the calling scope, pass context.Background().
 func (d *Droid) Send(ctx context.Context, text string) error {
-	return d.enqueue(ctx, userText(text), nil)
+	return d.enqueue(ctx, userText(text), nil, nil)
 }
 
-// Run enqueues a prompt and blocks until its run completes, returning the final
-// assistant message. Convenience for one-shot workloads; does not require
-// consuming Events.
-func (d *Droid) Run(ctx context.Context, text string) (AssistantMessage, error) {
+// Execute enqueues a prompt and blocks until its run completes, returning the
+// final assistant message. Convenience for synchronous one-shot workloads; it
+// does not require consuming Events.
+func (d *Droid) Execute(ctx context.Context, text string) (AssistantMessage, error) {
 	result := make(chan runResult, 1)
-	if err := d.enqueue(ctx, userText(text), result); err != nil {
+	if err := d.enqueue(ctx, userText(text), result, nil); err != nil {
 		return AssistantMessage{}, err
 	}
 	select {
@@ -198,20 +216,35 @@ func (d *Droid) Run(ctx context.Context, text string) (AssistantMessage, error) 
 	}
 }
 
-func (d *Droid) enqueue(ctx context.Context, msg Message, result chan runResult) error {
+// Stream enqueues a prompt and returns its run-scoped event stream. The
+// stream's Events channel closes when this run ends; Result then returns the
+// final assistant message and error. Events for this run are delivered to the
+// returned stream rather than Droid.Events().
+func (d *Droid) Stream(ctx context.Context, text string) (Run, error) {
+	stream := newAgentRun()
+	if err := d.enqueue(ctx, userText(text), nil, stream); err != nil {
+		return nil, err
+	}
+	return stream, nil
+}
+
+func (d *Droid) enqueue(ctx context.Context, msg Message, result chan runResult, stream *agentRun) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	select {
-	case <-d.closed:
+
+	// Admission and worker shutdown share queueMu. Once accepting becomes
+	// false, no prompt can race past the worker's final queue drain.
+	d.queueMu.Lock()
+	defer d.queueMu.Unlock()
+	if !d.accepting {
 		return fmt.Errorf("droids: droid closed")
-	default:
 	}
 	select {
-	case d.queue <- queuedPrompt{ctx: ctx, messages: []Message{msg}, result: result}:
+	case d.queue <- queuedPrompt{ctx: ctx, messages: []Message{msg}, result: result, stream: stream}:
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
@@ -243,7 +276,13 @@ func (d *Droid) Abort() {
 // channel. Idempotent.
 func (d *Droid) Close() {
 	d.closeOnce.Do(func() {
+		// Closing the signal first unblocks any enqueue waiting for queue space.
+		// queueMu then gates all future admissions before the worker's final
+		// drain.
 		close(d.closed)
+		d.queueMu.Lock()
+		d.accepting = false
+		d.queueMu.Unlock()
 	})
 }
 

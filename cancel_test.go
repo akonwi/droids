@@ -39,7 +39,7 @@ func TestRunContextCancelsToolExecution(t *testing.T) {
 	defer d.Close()
 
 	ctx, cancel := context.WithCancel(context.Background())
-	go func() { _, _ = d.Run(ctx, "go") }()
+	go func() { _, _ = d.Execute(ctx, "go") }()
 
 	<-entered
 	cancel()
@@ -57,7 +57,7 @@ func TestCloseAbortsActiveRun(t *testing.T) {
 		Tools:     []AnyTool{blockingTool("block", entered, outcome)},
 	})
 
-	go func() { _, _ = d.Run(context.Background(), "go") }()
+	go func() { _, _ = d.Execute(context.Background(), "go") }()
 
 	<-entered
 	d.Close()
@@ -76,7 +76,7 @@ func TestAbortCancelsToolExecution(t *testing.T) {
 	})
 	defer d.Close()
 
-	go func() { _, _ = d.Run(context.Background(), "go") }()
+	go func() { _, _ = d.Execute(context.Background(), "go") }()
 
 	<-entered
 	d.Abort()
@@ -109,7 +109,7 @@ func TestRunCancelPreservesErrorIdentity(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	errc := make(chan error, 1)
-	go func() { _, err := d.Run(ctx, "go"); errc <- err }()
+	go func() { _, err := d.Execute(ctx, "go"); errc <- err }()
 
 	<-entered
 	cancel()

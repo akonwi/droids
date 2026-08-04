@@ -51,7 +51,7 @@ func TestBeforeToolCallBlocks(t *testing.T) {
 	})
 	defer d.Close()
 
-	if _, err := d.Run(context.Background(), "go"); err != nil {
+	if _, err := d.Execute(context.Background(), "go"); err != nil {
 		t.Fatal(err)
 	}
 	if ran {
@@ -82,7 +82,7 @@ func TestToolResultCanMarkApplicationError(t *testing.T) {
 	}
 	defer d.Close()
 
-	if _, err := d.Run(context.Background(), "go"); err != nil {
+	if _, err := d.Execute(context.Background(), "go"); err != nil {
 		t.Fatal(err)
 	}
 	last := lastToolResult(t, d)
@@ -104,7 +104,7 @@ func TestBeforeToolCallShortCircuits(t *testing.T) {
 	})
 	defer d.Close()
 
-	if _, err := d.Run(context.Background(), "go"); err != nil {
+	if _, err := d.Execute(context.Background(), "go"); err != nil {
 		t.Fatal(err)
 	}
 	if ran {
@@ -134,7 +134,7 @@ func TestAfterToolCallIdentityPreservesExecutionError(t *testing.T) {
 	}
 	defer d.Close()
 
-	if _, err := d.Run(context.Background(), "go"); err != nil {
+	if _, err := d.Execute(context.Background(), "go"); err != nil {
 		t.Fatal(err)
 	}
 	if result := lastToolResult(t, d); !result.IsError || textOfContent(result.Content) != "failed" {
@@ -155,7 +155,7 @@ func TestAfterToolCallRewrites(t *testing.T) {
 	})
 	defer d.Close()
 
-	if _, err := d.Run(context.Background(), "go"); err != nil {
+	if _, err := d.Execute(context.Background(), "go"); err != nil {
 		t.Fatal(err)
 	}
 	if !ran {
@@ -178,7 +178,7 @@ func TestHookErrorDegradesToErrorResult(t *testing.T) {
 	})
 	defer d.Close()
 
-	if _, err := d.Run(context.Background(), "go"); err != nil {
+	if _, err := d.Execute(context.Background(), "go"); err != nil {
 		t.Fatal(err)
 	}
 	last := lastToolResult(t, d)

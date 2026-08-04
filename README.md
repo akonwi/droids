@@ -67,7 +67,7 @@ func main() {
 	}
 	defer d.Close()
 
-	msg, err := d.Run(context.Background(), "What's the weather in Paris?")
+	msg, err := d.Execute(context.Background(), "What's the weather in Paris?")
 	if err != nil {
 		panic(err)
 	}
@@ -206,16 +206,17 @@ d, _ := droids.New(droids.Options{
 
 ## Streaming vs one-shot
 
-`Run` blocks and returns the final message — ideal for one-shot / background
-work. For interactive use, drive the droid with `Send`/`Steer`/`Abort` and range
-over its long-lived event channel:
+`Execute` blocks and returns the final message — ideal for synchronous,
+non-streamed work. To stream one run, use `Stream`; the returned `Run` event
+channel closes when that run ends, so an ordinary range loop is sufficient:
 
 ```go
-d.Send(ctx, "message ...")       // starts a turn, or a follow-up if busy
-d.Steer("actually, focus on X")  // inject mid-run, picked up between turns
-d.Abort()                         // interrupt the active run
+run, err := d.Stream(ctx, "message ...")
+if err != nil {
+	return err
+}
 
-for ev := range d.Events() {
+for ev := range run.Events() {
 	switch e := ev.(type) {
 	case droids.MessageDelta:
 		if td, ok := e.Stream.(droids.StreamTextDelta); ok {
@@ -229,10 +230,25 @@ for ev := range d.Events() {
 		fmt.Println("error:", e.Message.ErrorMessage)
 	}
 }
+
+message, err := run.Result()
 ```
 
-`Events()` returns the same channel on every call; if you never call it, the
-loop still runs and still persists.
+For a long-lived interactive session, use `Send`/`Steer`/`Abort` with
+`Droid.Events()`:
+
+```go
+events := d.Events()
+d.Send(ctx, "message ...")       // starts a run, or queues behind one
+d.Steer("actually, focus on X")  // inject between turns of the active run
+d.Abort()                         // interrupt the active run
+```
+
+`Droid.Events()` is session-scoped: it returns the same channel on every call
+and closes only when the droid finishes shutting down. Stop consuming each run
+on `AgentEnd`; do not range over it expecting per-run closure. `Stream` events
+are delivered to the returned `Run` rather than `Droid.Events()`. If neither
+event API is requested, the loop still runs and persists.
 
 ## Storage
 
