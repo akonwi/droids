@@ -295,7 +295,7 @@ func (d *Droid) executeToolsParallel(ctx context.Context, calls []ToolCall) []To
 	var execIdx []int
 
 	// Preflight, sequentially in source order: emit starts and resolve before
-	// hooks (block / short-circuit) deterministically. Survivors execute.
+	// hooks (reject / short-circuit) deterministically. Survivors execute.
 	for i, call := range calls {
 		d.emit(ToolExecutionStart{ToolCallID: call.ID, ToolName: call.Name, Arguments: call.Arguments})
 		if oc, proceed := d.beforeTool(ctx, call); !proceed {
@@ -364,7 +364,7 @@ func (d *Droid) runToolCall(ctx context.Context, call ToolCall) (ToolResult, boo
 }
 
 // beforeTool applies the before hook. proceed is false when the hook produced a
-// terminal outcome (error, block, or short-circuit) and the tool must not run.
+// per-call outcome (error, rejection, or short-circuit) and the tool must not run.
 // A short-circuit result also skips the after hook. Hook errors degrade to an
 // error result rather than crashing the loop.
 func (d *Droid) beforeTool(ctx context.Context, call ToolCall) (oc toolOutcome, proceed bool) {
@@ -375,10 +375,10 @@ func (d *Droid) beforeTool(ctx context.Context, call ToolCall) (oc toolOutcome, 
 	switch {
 	case err != nil:
 		return toolOutcome{result: toolErrorText(err.Error()), isError: true}, false
-	case br.Block:
+	case br.Reject:
 		reason := br.Reason
 		if reason == "" {
-			reason = "Tool execution was blocked"
+			reason = "Tool execution was rejected"
 		}
 		return toolOutcome{result: toolErrorText(reason), isError: true}, false
 	case br.Result != nil:

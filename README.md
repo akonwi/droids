@@ -188,16 +188,25 @@ configured SDK `OAuthHandler` through the transport factory.
 
 ### Hooks
 
-`BeforeToolCall` can block a call or short-circuit it with a cached result;
+`BeforeToolCall` can reject a call or short-circuit it with a cached result;
 `AfterToolCall` can rewrite the result. Hook errors degrade to an error tool
-result rather than crashing the loop.
+result rather than crashing the loop. A rejection becomes an error tool result
+that the model observes, and the run continues.
+
+To reject this call and also stop before another model turn, return
+`Reject: true` and cancel the run context or call `Abort()` inside the hook;
+cancelling after observing an event may be too late. Cancellation is
+cooperative and does not stop already-running or same-batch tools that ignore
+their context. The rejection result is persisted, so reconstruct the desired
+transcript before using `Continue` rather than appending a second result for the
+same call.
 
 ```go
 d, _ := droids.New(droids.Options{
 	// ...
 	BeforeToolCall: func(ctx context.Context, in droids.BeforeToolContext) (droids.BeforeToolResult, error) {
 		if !allowed(in.ToolCall.Name) {
-			return droids.BeforeToolResult{Block: true, Reason: "not permitted"}, nil
+			return droids.BeforeToolResult{Reject: true, Reason: "not permitted"}, nil
 		}
 		return droids.BeforeToolResult{}, nil
 	},

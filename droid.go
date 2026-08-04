@@ -42,10 +42,12 @@ type Options struct {
 	// 0 (default) means unbounded.
 	MaxParallelTools int
 
-	// BeforeToolCall runs after arguments are decoded and before a tool
-	// executes. It can block the call, or short-circuit it with a cached
-	// result (idempotency). A returned error degrades to an error tool result;
-	// it never crashes the loop. Optional.
+	// BeforeToolCall runs after receiving a tool call and before its arguments
+	// are decoded or the tool executes. It can reject the call (returning an
+	// error result to the model while the run continues), or short-circuit it
+	// with a cached result
+	// (idempotency). A returned error degrades to an error tool result; it never
+	// crashes the loop. Optional.
 	BeforeToolCall func(ctx context.Context, in BeforeToolContext) (BeforeToolResult, error)
 
 	// AfterToolCall runs after a tool executes and before its result is

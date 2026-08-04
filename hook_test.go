@@ -39,14 +39,42 @@ func echoTool(name string, ran *bool) AnyTool {
 	})
 }
 
-func TestBeforeToolCallBlocks(t *testing.T) {
+func TestBeforeToolCallRejectsAndContinues(t *testing.T) {
 	var ran bool
 	d, _ := New(Options{
 		Providers: toolThenStop(t, "act"),
 		Model:     "m",
 		Tools:     []AnyTool{echoTool("act", &ran)},
 		BeforeToolCall: func(_ context.Context, in BeforeToolContext) (BeforeToolResult, error) {
-			return BeforeToolResult{Block: true, Reason: "nope"}, nil
+			return BeforeToolResult{Reject: true, Reason: "nope"}, nil
+		},
+	})
+	defer d.Close()
+
+	message, err := d.Execute(context.Background(), "go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if message.Text() != "final" {
+		t.Fatalf("message = %q, want final (run should continue after rejection)", message.Text())
+	}
+	if ran {
+		t.Fatal("tool executed despite rejection")
+	}
+	last := lastToolResult(t, d)
+	if !last.IsError || textOfContent(last.Content) != "nope" {
+		t.Fatalf("expected rejected error result, got %+v", last)
+	}
+}
+
+func TestBeforeToolCallRejectsWithDefaultReason(t *testing.T) {
+	var ran bool
+	d, _ := New(Options{
+		Providers: toolThenStop(t, "act"),
+		Model:     "m",
+		Tools:     []AnyTool{echoTool("act", &ran)},
+		BeforeToolCall: func(_ context.Context, in BeforeToolContext) (BeforeToolResult, error) {
+			return BeforeToolResult{Reject: true}, nil
 		},
 	})
 	defer d.Close()
@@ -55,11 +83,11 @@ func TestBeforeToolCallBlocks(t *testing.T) {
 		t.Fatal(err)
 	}
 	if ran {
-		t.Fatal("tool executed despite block")
+		t.Fatal("tool executed despite rejection")
 	}
 	last := lastToolResult(t, d)
-	if !last.IsError || textOfContent(last.Content) != "nope" {
-		t.Fatalf("expected blocked error result, got %+v", last)
+	if !last.IsError || textOfContent(last.Content) != "Tool execution was rejected" {
+		t.Fatalf("unexpected default rejection result: %+v", last)
 	}
 }
 

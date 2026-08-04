@@ -33,12 +33,13 @@ type BeforeToolContext struct {
 
 // BeforeToolResult is returned by a BeforeToolCall hook. Zero value = proceed.
 type BeforeToolResult struct {
-	// Block prevents execution; an error tool result (Reason) is returned to
-	// the model instead.
-	Block bool
-	// Reason is the error text when Block is set. Defaults to a generic message.
+	// Reject prevents this tool call from executing and appends an error tool
+	// result containing Reason. The model observes the rejection and the run
+	// continues normally; Reject does not halt or abort the run.
+	Reject bool
+	// Reason is the error text when Reject is set. Defaults to a generic message.
 	Reason string
-	// Result short-circuits execution: when non-nil (and not blocked), the
+	// Result short-circuits execution: when non-nil (and not rejected), the
 	// tool is skipped and this result is used as-is. The idempotency primitive
 	// — return a previously stored result keyed by ToolCall.ID.
 	Result *ToolResult
