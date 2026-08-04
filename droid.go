@@ -79,10 +79,11 @@ type Droid struct {
 }
 
 type queuedPrompt struct {
-	ctx      context.Context
-	messages []Message
-	result   chan runResult
-	stream   *agentRun
+	ctx          context.Context
+	messages     []Message
+	continuation bool
+	result       chan runResult
+	stream       *agentRun
 }
 
 type runResult struct {
@@ -195,15 +196,42 @@ func (d *Droid) setActiveRun(stream *agentRun) {
 // the run's provider calls and tool execution. For fire-and-forget work that
 // must outlive the calling scope, pass context.Background().
 func (d *Droid) Send(ctx context.Context, text string) error {
-	return d.enqueue(ctx, userText(text), nil, nil)
+	return d.enqueue(ctx, []Message{userText(text)}, false, nil, nil)
 }
 
 // Execute enqueues a prompt and blocks until its run completes, returning the
 // final assistant message. Convenience for synchronous one-shot workloads; it
 // does not require consuming Events.
 func (d *Droid) Execute(ctx context.Context, text string) (AssistantMessage, error) {
+	return d.execute(ctx, []Message{userText(text)}, false)
+}
+
+// Stream enqueues a prompt and returns its run-scoped event stream. The
+// stream's Events channel closes when this run ends; Result then returns the
+// final assistant message and error. Events for this run are delivered to the
+// returned stream rather than Droid.Events().
+func (d *Droid) Stream(ctx context.Context, text string) (Run, error) {
+	return d.stream(ctx, []Message{userText(text)}, false)
+}
+
+// Continue resumes the loop from the current transcript without injecting a
+// new message. The transcript must end with a complete, source-ordered batch
+// of tool results matching the preceding assistant tool calls. A continuation
+// receives a fresh MaxSteps budget.
+func (d *Droid) Continue(ctx context.Context) (AssistantMessage, error) {
+	return d.execute(ctx, nil, true)
+}
+
+// ContinueStream is the run-scoped streaming equivalent of Continue. Transcript
+// validation occurs when the queued continuation starts; validation failures
+// are returned by Run.Result and close Run.Events without emitting events.
+func (d *Droid) ContinueStream(ctx context.Context) (Run, error) {
+	return d.stream(ctx, nil, true)
+}
+
+func (d *Droid) execute(ctx context.Context, messages []Message, continuation bool) (AssistantMessage, error) {
 	result := make(chan runResult, 1)
-	if err := d.enqueue(ctx, userText(text), result, nil); err != nil {
+	if err := d.enqueue(ctx, messages, continuation, result, nil); err != nil {
 		return AssistantMessage{}, err
 	}
 	select {
@@ -216,19 +244,21 @@ func (d *Droid) Execute(ctx context.Context, text string) (AssistantMessage, err
 	}
 }
 
-// Stream enqueues a prompt and returns its run-scoped event stream. The
-// stream's Events channel closes when this run ends; Result then returns the
-// final assistant message and error. Events for this run are delivered to the
-// returned stream rather than Droid.Events().
-func (d *Droid) Stream(ctx context.Context, text string) (Run, error) {
+func (d *Droid) stream(ctx context.Context, messages []Message, continuation bool) (Run, error) {
 	stream := newAgentRun()
-	if err := d.enqueue(ctx, userText(text), nil, stream); err != nil {
+	if err := d.enqueue(ctx, messages, continuation, nil, stream); err != nil {
 		return nil, err
 	}
 	return stream, nil
 }
 
-func (d *Droid) enqueue(ctx context.Context, msg Message, result chan runResult, stream *agentRun) error {
+func (d *Droid) enqueue(
+	ctx context.Context,
+	messages []Message,
+	continuation bool,
+	result chan runResult,
+	stream *agentRun,
+) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -244,7 +274,10 @@ func (d *Droid) enqueue(ctx context.Context, msg Message, result chan runResult,
 		return fmt.Errorf("droids: droid closed")
 	}
 	select {
-	case d.queue <- queuedPrompt{ctx: ctx, messages: []Message{msg}, result: result, stream: stream}:
+	case d.queue <- queuedPrompt{
+		ctx: ctx, messages: messages, continuation: continuation,
+		result: result, stream: stream,
+	}:
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
@@ -254,7 +287,8 @@ func (d *Droid) enqueue(ctx context.Context, msg Message, result chan runResult,
 }
 
 // Steer injects a message mid-run. It is picked up between turns of the active
-// run (or the next run if idle).
+// normal run (or the next normal run if idle). Continuation runs deliberately
+// retain steering so their exact tool-result transcript is not changed.
 func (d *Droid) Steer(text string) {
 	d.mu.Lock()
 	d.steering = append(d.steering, userText(text))

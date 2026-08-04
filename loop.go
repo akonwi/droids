@@ -10,8 +10,8 @@ import (
 // loop.go — the bounded multi-step tool loop (Layer 2). Consumes the queue
 // filled by Send/Run, streams assistant turns from the provider, executes tool
 // calls, and repeats until the model stops, MaxSteps is hit, or the run is
-// aborted. Steering messages are drained between turns; each queued prompt is
-// treated as its own run (follow-up).
+// aborted. Steering messages are drained between turns of normal runs (and
+// retained during continuations); each queued prompt is its own run.
 
 func (d *Droid) worker() {
 	for {
@@ -125,6 +125,14 @@ func (d *Droid) runPrompt(qp queuedPrompt) runResult {
 		}
 	}
 
+	// Validate at execution time rather than admission time: a continuation may
+	// wait behind another run that changes the transcript before it starts.
+	if qp.continuation {
+		if err := d.validateContinuation(); err != nil {
+			return runResult{err: err}
+		}
+	}
+
 	d.emit(AgentStart{})
 
 	// Append and announce the seed prompt(s).
@@ -153,11 +161,14 @@ func (d *Droid) runPrompt(qp queuedPrompt) runResult {
 
 		d.emit(TurnStart{})
 
-		// Drain steering messages before the turn.
-		for _, m := range d.drainSteering() {
-			d.appendMessage(ctx, m)
-			d.emit(MessageStart{Message: m})
-			d.emit(MessageEnd{Message: m})
+		// A continuation must preserve the exact tool-result tail: do not inject
+		// pending/concurrent steering. Retain it for the next normal run.
+		if !qp.continuation {
+			for _, m := range d.drainSteering() {
+				d.appendMessage(ctx, m)
+				d.emit(MessageStart{Message: m})
+				d.emit(MessageEnd{Message: m})
+			}
 		}
 
 		msg := d.streamTurn(ctx)
@@ -412,6 +423,76 @@ func toolErrorText(text string) ToolResult {
 }
 
 // --- transcript + steering helpers (mutex-guarded) ---
+
+// validateContinuation verifies that the transcript ends with exactly one
+// source-ordered result for every tool call in the preceding assistant message.
+// Providers require this shape before another assistant turn can be requested.
+func (d *Droid) validateContinuation() error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	if len(d.transcript) == 0 {
+		return fmt.Errorf("droids: cannot continue an empty transcript")
+	}
+
+	firstResult := len(d.transcript)
+	for firstResult > 0 {
+		if _, ok := d.transcript[firstResult-1].(ToolResultMessage); !ok {
+			break
+		}
+		firstResult--
+	}
+	if firstResult == len(d.transcript) {
+		return fmt.Errorf("droids: continuation transcript must end with tool results")
+	}
+	if firstResult == 0 {
+		return fmt.Errorf("droids: continuation tool results have no preceding assistant message")
+	}
+
+	assistant, ok := d.transcript[firstResult-1].(AssistantMessage)
+	if !ok {
+		return fmt.Errorf("droids: continuation tool results must follow an assistant message")
+	}
+	calls := assistant.ToolCalls()
+	results := d.transcript[firstResult:]
+	if len(calls) == 0 {
+		return fmt.Errorf("droids: continuation assistant message has no tool calls")
+	}
+	if len(results) != len(calls) {
+		return fmt.Errorf(
+			"droids: continuation has %d tool results for %d tool calls",
+			len(results), len(calls),
+		)
+	}
+	seenIDs := make(map[string]struct{}, len(calls))
+	for i, call := range calls {
+		if call.ID == "" {
+			return fmt.Errorf("droids: continuation tool call %d has an empty id", i)
+		}
+		if call.Name == "" {
+			return fmt.Errorf("droids: continuation tool call %d has an empty name", i)
+		}
+		if _, exists := seenIDs[call.ID]; exists {
+			return fmt.Errorf("droids: continuation tool call %d has duplicate id %q", i, call.ID)
+		}
+		seenIDs[call.ID] = struct{}{}
+
+		result := results[i].(ToolResultMessage)
+		if result.ToolCallID != call.ID {
+			return fmt.Errorf(
+				"droids: continuation tool result %d has id %q, want %q",
+				i, result.ToolCallID, call.ID,
+			)
+		}
+		if result.ToolName != "" && result.ToolName != call.Name {
+			return fmt.Errorf(
+				"droids: continuation tool result %d has name %q, want %q",
+				i, result.ToolName, call.Name,
+			)
+		}
+	}
+	return nil
+}
 
 // persistTimeout bounds a best-effort Storage.Append that is detached from run
 // cancellation, so a stuck store cannot wedge the worker forever.

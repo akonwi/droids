@@ -36,7 +36,7 @@ and grows outward.
 | `mcp/` | Optional progressive-disclosure adapter for MCP tool namespaces. |
 | `storage.go` | `Storage` seam + `MemoryStorage` (the default). |
 | `event.go` | Agent-level `Event` union emitted by session and per-run streams. |
-| `droid.go` | The `Droid` facade: `New`, `Execute`, `Stream`, `Send`, `Steer`, `Abort`, `Events`, `Close`. |
+| `droid.go` | The `Droid` facade: `New`, `Execute`, `Stream`, `Continue`, `ContinueStream`, `Send`, `Steer`, `Abort`, `Events`, `Close`. |
 | `run.go` | Per-run event stream and reusable final result. |
 | `loop.go` | The bounded tool loop that drives turns. |
 | `cmd/chat` | A CLI REPL example for manual testing. |

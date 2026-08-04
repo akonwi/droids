@@ -266,6 +266,55 @@ d, _ := droids.New(droids.Options{
 })
 ```
 
+## Human-in-the-loop continuation
+
+After userland approves and executes a gated tool, persist its
+`ToolResultMessage`, close the prior droid (or reconstruct in a new process),
+then reconstruct the droid so it reloads the transcript and continue without
+injecting another user message:
+
+```go
+err := store.Append(ctx, sessionID, droids.ToolResultMessage{
+	ToolCallID: approvedCall.ID,
+	ToolName:   approvedCall.Name,
+	Content:    []droids.Content{droids.TextContent{Text: resultText}},
+})
+if err != nil {
+	return err
+}
+
+d, err := droids.New(droids.Options{
+	Providers: providers,
+	Model:     model,
+	Storage:   store,
+	Session:   sessionID,
+})
+if err != nil {
+	return err
+}
+defer d.Close()
+
+if wantEvents {
+	run, err := d.ContinueStream(ctx)
+	if err != nil {
+		return err
+	}
+	for event := range run.Events() {
+		handle(event)
+	}
+	message, err := run.Result()
+	// use message
+} else {
+	message, err := d.Continue(ctx)
+	// use message
+}
+```
+
+The transcript must end with a complete, source-ordered batch of tool results
+matching every tool call in the preceding assistant message. Continuations get
+a fresh `MaxSteps` budget. Pending steering is retained for the next normal
+`Execute`/`Stream` run rather than injected into the continuation.
+
 ## Example
 
 A CLI chat REPL with read-only filesystem tools lives in
