@@ -198,14 +198,26 @@ func (d *Droid) setActiveRun(stream *agentRun) {
 // the run's provider calls and tool execution. For fire-and-forget work that
 // must outlive the calling scope, pass context.Background().
 func (d *Droid) Send(ctx context.Context, text string) error {
-	return d.enqueue(ctx, []Message{userText(text)}, false, nil, nil)
+	return d.SendMessage(ctx, userText(text))
+}
+
+// SendMessage enqueues a provider-neutral user message. It is the structured
+// content equivalent of Send and supports text, image, and file blocks.
+func (d *Droid) SendMessage(ctx context.Context, message UserMessage) error {
+	return d.enqueue(ctx, []Message{cloneUserMessage(message)}, false, nil, nil)
 }
 
 // Execute enqueues a prompt and blocks until its run completes, returning the
 // final assistant message. Convenience for synchronous one-shot workloads; it
 // does not require consuming Events.
 func (d *Droid) Execute(ctx context.Context, text string) (AssistantMessage, error) {
-	return d.execute(ctx, []Message{userText(text)}, false)
+	return d.ExecuteMessage(ctx, userText(text))
+}
+
+// ExecuteMessage executes a provider-neutral user message synchronously. It is
+// the structured content equivalent of Execute.
+func (d *Droid) ExecuteMessage(ctx context.Context, message UserMessage) (AssistantMessage, error) {
+	return d.execute(ctx, []Message{cloneUserMessage(message)}, false)
 }
 
 // Stream enqueues a prompt and returns its run-scoped event stream. The
@@ -213,7 +225,18 @@ func (d *Droid) Execute(ctx context.Context, text string) (AssistantMessage, err
 // final assistant message and error. Events for this run are delivered to the
 // returned stream rather than Droid.Events().
 func (d *Droid) Stream(ctx context.Context, text string) (Run, error) {
-	return d.stream(ctx, []Message{userText(text)}, false)
+	return d.StreamMessage(ctx, userText(text))
+}
+
+// StreamMessage starts a run from a provider-neutral user message. It is the
+// structured content equivalent of Stream.
+func (d *Droid) StreamMessage(ctx context.Context, message UserMessage) (Run, error) {
+	return d.stream(ctx, []Message{cloneUserMessage(message)}, false)
+}
+
+func cloneUserMessage(message UserMessage) UserMessage {
+	message.Content = append([]Content(nil), message.Content...)
+	return message
 }
 
 // Continue resumes the loop from the current transcript without injecting a

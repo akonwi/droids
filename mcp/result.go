@@ -55,10 +55,7 @@ func convertCallResult(namespace, tool string, result *sdkmcp.CallToolResult, ma
 			if err := consume(base64.StdEncoding.EncodedLen(len(block.Data))); err != nil {
 				return droids.ToolResult{}, err
 			}
-			content = append(content, droids.ImageContent{
-				Data:     base64.StdEncoding.EncodeToString(block.Data),
-				MimeType: block.MIMEType,
-			})
+			content = append(content, droids.NewImageData(block.MIMEType, block.Data))
 		default:
 			// Droids providers currently support text and image tool-result blocks.
 			// Preserve other MCP content (audio, resources, and links) as JSON text

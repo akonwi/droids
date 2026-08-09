@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed
+Accepted
 
 ## Context
 
@@ -48,7 +48,14 @@ type ImageContent struct {
 }
 ```
 
-Provide corresponding URL and data constructors for images. `ImageContent` remains the semantic representation for provider- or tool-produced visual blocks; `FileContent` represents a named attachment and may itself contain image media.
+Provide corresponding URL and data constructors for images:
+
+```go
+func NewImageURL(mediaType, rawURL string) (ImageContent, error)
+func NewImageData(mediaType string, data []byte) ImageContent
+```
+
+`ImageContent` remains the semantic representation for provider- or tool-produced visual blocks; `FileContent` represents a named attachment and may itself contain image media.
 
 Droids will not represent application file references, storage keys, provider file IDs, or provider upload lifecycle state. Applications resolve and authorize their durable attachment records before constructing droids messages. Applications using expiring signed URLs regenerate them whenever they rebuild a transcript.
 

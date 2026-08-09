@@ -21,13 +21,25 @@ func TestOpenAIResponsesStreamsTextAndBuildsRequest(t *testing.T) {
 	)
 	defer server.Close()
 
+	report, err := NewFileURL("report.pdf", "application/pdf", "https://files.example/report.pdf?signature=abc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	namedImage, err := NewFileURL("photo.png", "image/png", "https://files.example/photo.png")
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	providers, model := testOpenAIProvider(t, server.URL)
 	temperature := 0.25
 	stream := providers.Stream(context.Background(), model, Request{
 		SystemPrompt: "Be concise.",
 		Messages: []Message{UserMessage{Content: []Content{
 			TextContent{Text: "Say hello"},
-			ImageContent{Data: "aGVsbG8=", MimeType: "image/png"},
+			NewImageData("image/png", []byte("hello")),
+			report,
+			NewFileData("notes.txt", "text/plain", []byte("notes")),
+			namedImage,
 		}}},
 		Tools: []ToolSchema{{
 			Name:        "lookup",
@@ -98,10 +110,54 @@ func TestOpenAIResponsesStreamsTextAndBuildsRequest(t *testing.T) {
 	if got := content[1].(map[string]any); got["type"] != "input_image" || got["image_url"] != "data:image/png;base64,aGVsbG8=" || got["detail"] != "auto" {
 		t.Fatalf("image input = %#v", got)
 	}
+	if got := content[2].(map[string]any); got["type"] != "input_file" || got["file_url"] != "https://files.example/report.pdf?signature=abc" || got["filename"] != nil {
+		t.Fatalf("URL file input = %#v", got)
+	}
+	if got := content[3].(map[string]any); got["type"] != "input_file" || got["file_data"] != "data:text/plain;base64,bm90ZXM=" || got["filename"] != "notes.txt" {
+		t.Fatalf("data file input = %#v", got)
+	}
+	if got := content[4].(map[string]any); got["type"] != "input_image" || got["image_url"] != "https://files.example/photo.png" {
+		t.Fatalf("named image input = %#v", got)
+	}
 	tools := request["tools"].([]any)
 	tool := tools[0].(map[string]any)
 	if tool["type"] != "function" || tool["name"] != "lookup" || tool["strict"] != false {
 		t.Fatalf("tool = %#v", tool)
+	}
+}
+
+func TestOpenAIResponsesRejectsInvalidContentWithoutRequest(t *testing.T) {
+	requests := make(chan map[string]any, 1)
+	server := newResponsesServer(t, requests)
+	defer server.Close()
+
+	providers, model := testOpenAIProvider(t, server.URL)
+	stream := providers.Stream(context.Background(), model, Request{Messages: []Message{
+		UserMessage{Content: []Content{FileContent{
+			Filename: "report.pdf", MediaType: "application/pdf", URL: "http://files.example/report.pdf",
+		}}},
+	}})
+	var events []StreamEvent
+	for event := range stream.Events() {
+		events = append(events, event)
+	}
+	if len(events) != 2 {
+		t.Fatalf("events = %#v, want start + error", events)
+	}
+	if _, ok := events[0].(StreamStart); !ok {
+		t.Fatalf("first event = %T, want StreamStart", events[0])
+	}
+	if _, ok := events[1].(StreamError); !ok {
+		t.Fatalf("last event = %T, want StreamError", events[1])
+	}
+	message := stream.Result()
+	if message.StopReason != StopReasonError || !strings.Contains(message.ErrorMessage, "unsupported user content") || !strings.Contains(message.ErrorMessage, "https or data") {
+		t.Fatalf("message = %#v", message)
+	}
+	select {
+	case request := <-requests:
+		t.Fatalf("invalid content reached provider: %#v", request)
+	default:
 	}
 }
 
@@ -222,14 +278,18 @@ func TestOpenAIResponsesReplaysOutputAndReasoningItems(t *testing.T) {
 		t.Fatalf("thinking = %#v", thinking)
 	}
 
-	input := toOpenAIInput([]Message{
+	input, err := toOpenAIInput([]Message{
 		UserMessage{Content: []Content{TextContent{Text: "Look it up"}}},
 		message,
 		ToolResultMessage{ToolCallID: "call_1", ToolName: "lookup", Content: []Content{
 			TextContent{Text: "found"},
-			ImageContent{Data: "aW1hZ2U=", MimeType: "image/png"},
+			NewImageData("image/png", []byte("image")),
+			NewFileData("details.txt", "text/plain", []byte("details")),
 		}, IsError: false},
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	encoded, err := json.Marshal(input)
 	if err != nil {
 		t.Fatal(err)
@@ -247,10 +307,35 @@ func TestOpenAIResponsesReplaysOutputAndReasoningItems(t *testing.T) {
 		`"text":"found","type":"input_text"`,
 		`"type":"input_image"`,
 		`"image_url":"data:image/png;base64,aW1hZ2U="`,
+		`"file_data":"data:text/plain;base64,ZGV0YWlscw=="`,
+		`"filename":"details.txt"`,
+		`"type":"input_file"`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("replayed input missing %s: %s", want, body)
 		}
+	}
+}
+
+func TestOpenAIToolURLFileOmitsFilename(t *testing.T) {
+	file, err := NewFileURL("report.pdf", "application/pdf", "https://files.example/report.pdf")
+	if err != nil {
+		t.Fatal(err)
+	}
+	input, err := openAIToolFileParam(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := json.Marshal(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(encoded, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got["file_url"] != "https://files.example/report.pdf" || got["filename"] != nil {
+		t.Fatalf("tool URL file input = %#v", got)
 	}
 }
 
@@ -277,10 +362,14 @@ func TestOpenAIResponsesIncompleteAndErrorEvents(t *testing.T) {
 		if len(message.ToolCalls()) != 1 {
 			t.Fatalf("partial tool call should be retained for observability: %#v", message.Content)
 		}
-		replayed, err := json.Marshal(toOpenAIInput([]Message{
+		replayInput, err := toOpenAIInput([]Message{
 			message,
 			UserMessage{Content: []Content{TextContent{Text: "Try something else"}}},
-		}))
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		replayed, err := json.Marshal(replayInput)
 		if err != nil {
 			t.Fatal(err)
 		}

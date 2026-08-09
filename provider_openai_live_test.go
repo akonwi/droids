@@ -5,6 +5,7 @@ package droids
 import (
 	"context"
 	"os"
+	"strings"
 	"testing"
 	"time"
 )
@@ -54,7 +55,10 @@ func testLiveOpenAIResponses(t *testing.T, config OpenAI, modelID string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
 	stream := providers.Stream(ctx, model, Request{Messages: []Message{
-		UserMessage{Content: []Content{TextContent{Text: "Reply with exactly: ok"}}},
+		UserMessage{Content: []Content{
+			TextContent{Text: "Read the attached note and reply with exactly its code word."},
+			NewFileData("note.txt", "text/plain", []byte("cobalt")),
+		}},
 	}})
 	for range stream.Events() {
 	}
@@ -62,7 +66,8 @@ func testLiveOpenAIResponses(t *testing.T, config OpenAI, modelID string) {
 	if message.StopReason == StopReasonError || message.StopReason == StopReasonAborted {
 		t.Fatalf("response failed: %s", message.ErrorMessage)
 	}
-	if message.Text() == "" {
-		t.Fatal("response contained no text")
+	answer := strings.Trim(strings.ToLower(message.Text()), " \t\r\n.\"'")
+	if answer != "cobalt" {
+		t.Fatalf("response did not consume attachment: %q", message.Text())
 	}
 }
