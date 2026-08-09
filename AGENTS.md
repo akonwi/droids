@@ -18,7 +18,7 @@ Provider     model abstraction + multiprovider streaming (Layer 1)
 Lineage: it distills [pi](https://github.com/earendil-works/pi)'s `pi-ai`
 (multiprovider streaming) and `pi-agent-core` (the agent loop) into idiomatic
 Go, plus the durability requirements from a server-side agent runtime. It is
-**not** a high-fidelity pi port — it starts with the OpenAI-compatible provider
+**not** a high-fidelity pi port — it starts with the OpenAI Responses provider
 and grows outward.
 
 ## Layout
@@ -29,7 +29,7 @@ and grows outward.
 | `model.go` | `Model` metadata, `Usage`/cost accounting. |
 | `stream.go` | Provider streaming contract: `Request`, `StreamEvent`, `Stream`. |
 | `provider.go` | `Providers` registry + `NewProviders` (routes by model); `Provider` config interface. |
-| `provider_openai.go` | OpenAI-compatible provider, backed by `openai-go`. |
+| `provider_openai.go` | OpenAI Responses provider, backed by `openai-go`. |
 | `provider_anthropic.go` | Anthropic Messages provider, backed by `anthropic-sdk-go`. |
 | `provider_cloudflare.go` | Cloudflare AI Gateway decorator over OpenAI/Anthropic configs. |
 | `tool.go` | Generic `Tool[Args]` + `NewTool` erasing to `AnyTool`. |

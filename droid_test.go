@@ -73,6 +73,51 @@ func TestRunSingleTurn(t *testing.T) {
 	}
 }
 
+func TestRunDoesNotExecuteToolCallsWithoutToolUseStop(t *testing.T) {
+	providerCalls := 0
+	toolCalls := 0
+	providers, err := NewProviders(fauxProvider{
+		model: Model{ID: "m"},
+		reply: func(Request) AssistantMessage {
+			providerCalls++
+			return AssistantMessage{
+				Content: []Content{ToolCall{
+					ID:        "partial",
+					Name:      "dangerous",
+					Arguments: []byte(`{"path":`),
+				}},
+				StopReason: StopReasonLength,
+			}
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tool := NewTool(Tool[struct{}]{
+		Name: "dangerous",
+		Execute: func(context.Context, struct{}) (ToolResult, error) {
+			toolCalls++
+			return ToolText("ran"), nil
+		},
+	})
+	d, err := New(Options{Providers: providers, Model: "m", Tools: []AnyTool{tool}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+
+	message, err := d.Execute(context.Background(), "do it")
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if message.StopReason != StopReasonLength {
+		t.Fatalf("stop reason = %q", message.StopReason)
+	}
+	if providerCalls != 1 || toolCalls != 0 {
+		t.Fatalf("provider calls = %d, tool calls = %d", providerCalls, toolCalls)
+	}
+}
+
 func TestNewRejectsDuplicateToolNames(t *testing.T) {
 	providers, err := NewProviders(fauxProvider{
 		model: Model{ID: "m"},

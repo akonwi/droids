@@ -187,7 +187,10 @@ func (d *Droid) runPrompt(qp queuedPrompt) runResult {
 		}
 
 		calls := msg.ToolCalls()
-		if len(calls) == 0 {
+		// Only an explicit tool-use stop authorizes execution. A provider may
+		// include a partial tool call in a length-limited response; executing it
+		// would run truncated or unintended arguments.
+		if msg.StopReason != StopReasonToolUse || len(calls) == 0 {
 			d.emit(TurnEnd{Message: msg})
 			d.emit(AgentEnd{Messages: d.snapshot()})
 			return runResult{message: msg}

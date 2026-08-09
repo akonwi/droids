@@ -55,8 +55,7 @@ func (g CloudflareGateway) OpenAI(cfg OpenAI) OpenAI {
 }
 
 // OpenAICompatible routes an OpenAI config through an arbitrary gateway provider
-// slug (e.g. "groq", "deepseek", "mistral", "cerebras", "workers-ai"). Any
-// upstream that speaks the OpenAI chat-completions format works this way. Set
+// slug. The selected upstream must implement the OpenAI Responses API. Set
 // cfg.ID to a distinct provider id when registering several alongside each
 // other.
 func (g CloudflareGateway) OpenAICompatible(slug string, cfg OpenAI) OpenAI {
@@ -65,14 +64,14 @@ func (g CloudflareGateway) OpenAICompatible(slug string, cfg OpenAI) OpenAI {
 	return cfg
 }
 
-// Compat routes an OpenAI config through the gateway's unified `compat`
-// endpoint, where the upstream is chosen per request by the model id
-// (e.g. "anthropic/claude-3-5-sonnet", "workers-ai/@cf/meta/llama-3.1-8b").
+// Compat points an OpenAI config at Cloudflare's legacy unified `compat`
+// endpoint.
 //
-// Because those model ids contain "/", use this as a single gateway-backed
-// provider rather than alongside providers whose id matches a model id's first
-// segment; the registry resolves the full id, but a same-named sibling provider
-// would shadow it.
+// Deprecated: Cloudflare documents this endpoint for Chat Completions, while
+// OpenAI now uses the Responses API. Use OpenAI for the native Cloudflare
+// `openai` endpoint, or configure OpenAI.BaseURL for Cloudflare's Responses-
+// compatible REST API. Compat is retained only to avoid removing the public
+// decorator while callers migrate.
 func (g CloudflareGateway) Compat(cfg OpenAI) OpenAI {
 	return g.OpenAICompatible("compat", cfg)
 }

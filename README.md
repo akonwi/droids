@@ -90,16 +90,19 @@ providers, _ := droids.NewProviders(
 
 | Provider | Config | Backing SDK |
 |----------|--------|-------------|
-| OpenAI (and OpenAI-compatible) | `droids.OpenAI{}` | `openai-go` |
+| OpenAI Responses (and Responses-compatible endpoints) | `droids.OpenAI{}` | `openai-go` |
 | Anthropic Messages | `droids.Anthropic{}` | `anthropic-sdk-go` |
 
-Both take `APIKey`, `BaseURL`, `Headers`, and `Models`. Point `BaseURL` at any
-compatible endpoint.
+Both take `APIKey`, `BaseURL`, `Headers`, and `Models`. Point `OpenAI.BaseURL`
+at an endpoint that implements the OpenAI Responses API; point
+`Anthropic.BaseURL` at an Anthropic Messages-compatible endpoint.
 
 ### Cloudflare AI Gateway
 
 The gateway is transport in front of the real providers, so it's a decorator
-over the provider configs:
+over the provider configs. The native Cloudflare `openai` endpoint supports the
+Responses API; Cloudflare's legacy unified `compat` endpoint is Chat
+Completions-only and is not compatible with the Responses-backed provider:
 
 ```go
 gw := droids.CloudflareGateway{AccountID: "...", GatewayID: "...", Token: "..."}
@@ -109,14 +112,8 @@ providers, _ := droids.NewProviders(
 	gw.Anthropic(droids.Anthropic{APIKey: anthropicKey, Models: ...}),
 )
 
-// any OpenAI-compatible upstream by gateway slug:
-gw.OpenAICompatible("groq", droids.OpenAI{APIKey: groqKey, ID: "groq", Models: ...})
-
-// or the unified compat endpoint (upstream chosen by model id):
-providers, _ := droids.NewProviders(gw.Compat(droids.OpenAI{
-	APIKey: key,
-	Models: []droids.Model{{ID: "anthropic/claude-3-5-sonnet"}},
-}))
+// another gateway upstream that implements the Responses API:
+gw.OpenAICompatible("provider-slug", droids.OpenAI{APIKey: key, ID: "provider", Models: ...})
 ```
 
 ## Tools

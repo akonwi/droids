@@ -9,7 +9,7 @@ Its lineage: the design distills [pi](https://github.com/earendil-works/pi)'s
 idiomatic Go, and folds in the durability/orchestration requirements from the
 Go Agent Runtime design (durable runs, retry/resume, observability,
 cancellation). It is **not** a high-fidelity pi port: it starts with the
-OpenAI-compatible provider and grows outward.
+OpenAI Responses provider and grows outward.
 
 ## Three layers, visible and independently usable
 
