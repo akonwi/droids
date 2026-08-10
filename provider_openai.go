@@ -3,6 +3,8 @@ package droids
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"net/url"
 	"strings"
 	"time"
 
@@ -88,10 +90,21 @@ func (p *openAIProvider) stream(ctx context.Context, model Model, req Request, _
 func (p *openAIProvider) run(ctx context.Context, model Model, req Request, s *pipeStream) {
 	defer s.finish()
 
+	partial := AssistantMessage{Provider: model.Provider, Model: model.ID, Timestamp: time.Now().UnixMilli()}
+	s.emit(StreamStart{Partial: partial})
+
+	input, err := toOpenAIInput(req.Messages)
+	if err != nil {
+		final := responseErrorMessage(model, ctx, err.Error())
+		s.final = final
+		s.emit(StreamError{Message: final})
+		return
+	}
+
 	params := responses.ResponseNewParams{
 		Model: shared.ResponsesModel(model.ID),
 		Input: responses.ResponseNewParamsInputUnion{
-			OfInputItemList: toOpenAIInput(req.Messages),
+			OfInputItemList: input,
 		},
 		// Droids owns and replays the durable transcript. Do not couple its
 		// storage lifetime to provider-side response retention.
@@ -118,9 +131,6 @@ func (p *openAIProvider) run(ctx context.Context, model Model, req Request, s *p
 			params.Reasoning.Summary = shared.ReasoningSummaryAuto
 		}
 	}
-
-	partial := AssistantMessage{Provider: model.Provider, Model: model.ID, Timestamp: time.Now().UnixMilli()}
-	s.emit(StreamStart{Partial: partial})
 
 	stream := p.client.Responses.NewStreaming(ctx, params)
 	defer stream.Close()
@@ -346,65 +356,114 @@ func responseErrorMessage(model Model, ctx context.Context, message string) Assi
 	}
 }
 
-func toOpenAIInput(messages []Message) responses.ResponseInputParam {
+func toOpenAIInput(messages []Message) (responses.ResponseInputParam, error) {
 	var out responses.ResponseInputParam
 	for _, message := range messages {
 		switch msg := message.(type) {
 		case UserMessage:
-			content := openAIUserContent(msg.Content)
+			content, err := openAIUserContent(msg.Content)
+			if err != nil {
+				return nil, err
+			}
 			if len(content) > 0 {
 				out = append(out, responses.ResponseInputItemParamOfMessage(content, responses.EasyInputMessageRoleUser))
 			}
 		case ToolResultMessage:
-			if content := openAIToolOutput(msg.Content); len(content) > 0 {
+			content, err := openAIToolOutput(msg.Content)
+			if err != nil {
+				return nil, err
+			}
+			if len(content) > 0 {
 				out = append(out, responses.ResponseInputItemParamOfFunctionCallOutput(msg.ToolCallID, content))
 			} else {
 				out = append(out, responses.ResponseInputItemParamOfFunctionCallOutput(msg.ToolCallID, ""))
 			}
 		case AssistantMessage:
-			out = append(out, openAIAssistantInput(msg)...)
+			content, err := openAIAssistantInput(msg)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, content...)
 		}
 	}
-	return out
+	return out, nil
 }
 
-func openAIUserContent(content []Content) responses.ResponseInputMessageContentListParam {
+func openAIUserContent(content []Content) (responses.ResponseInputMessageContentListParam, error) {
 	out := make(responses.ResponseInputMessageContentListParam, 0, len(content))
-	for _, block := range content {
+	for i, block := range content {
 		switch value := block.(type) {
 		case TextContent:
 			out = append(out, responses.ResponseInputContentParamOfInputText(value.Text))
 		case ImageContent:
-			image := responses.ResponseInputImageParam{
-				Detail:   responses.ResponseInputImageDetailAuto,
-				ImageURL: param.NewOpt("data:" + value.MimeType + ";base64," + value.Data),
+			image, err := openAIImageParam(value)
+			if err != nil {
+				return nil, openAIContentError("user", i, "ImageContent", err)
 			}
 			out = append(out, responses.ResponseInputContentUnionParam{OfInputImage: &image})
+		case FileContent:
+			if err := validateFileContent(value); err != nil {
+				return nil, openAIContentError("user", i, "FileContent", err)
+			}
+			if isImageMediaType(value.MediaType) {
+				image, err := openAIImageParam(ImageContent{MediaType: value.MediaType, URL: value.URL})
+				if err != nil {
+					return nil, openAIContentError("user", i, "FileContent", err)
+				}
+				out = append(out, responses.ResponseInputContentUnionParam{OfInputImage: &image})
+				continue
+			}
+			file, err := openAIFileParam(value)
+			if err != nil {
+				return nil, openAIContentError("user", i, "FileContent", err)
+			}
+			out = append(out, responses.ResponseInputContentUnionParam{OfInputFile: &file})
+		default:
+			return nil, openAIContentError("user", i, fmt.Sprintf("%T", block), fmt.Errorf("content type is not supported"))
 		}
 	}
-	return out
+	return out, nil
 }
 
-func openAIToolOutput(content []Content) responses.ResponseFunctionCallOutputItemListParam {
+func openAIToolOutput(content []Content) (responses.ResponseFunctionCallOutputItemListParam, error) {
 	out := make(responses.ResponseFunctionCallOutputItemListParam, 0, len(content))
-	for _, block := range content {
+	for i, block := range content {
 		switch value := block.(type) {
 		case TextContent:
 			out = append(out, responses.ResponseFunctionCallOutputItemParamOfInputText(value.Text))
 		case ImageContent:
-			image := responses.ResponseInputImageContentParam{
-				Detail:   responses.ResponseInputImageContentDetailAuto,
-				ImageURL: param.NewOpt("data:" + value.MimeType + ";base64," + value.Data),
+			image, err := openAIToolImageParam(value)
+			if err != nil {
+				return nil, openAIContentError("tool result", i, "ImageContent", err)
 			}
 			out = append(out, responses.ResponseFunctionCallOutputItemUnionParam{OfInputImage: &image})
+		case FileContent:
+			if err := validateFileContent(value); err != nil {
+				return nil, openAIContentError("tool result", i, "FileContent", err)
+			}
+			if isImageMediaType(value.MediaType) {
+				image, err := openAIToolImageParam(ImageContent{MediaType: value.MediaType, URL: value.URL})
+				if err != nil {
+					return nil, openAIContentError("tool result", i, "FileContent", err)
+				}
+				out = append(out, responses.ResponseFunctionCallOutputItemUnionParam{OfInputImage: &image})
+				continue
+			}
+			file, err := openAIToolFileParam(value)
+			if err != nil {
+				return nil, openAIContentError("tool result", i, "FileContent", err)
+			}
+			out = append(out, responses.ResponseFunctionCallOutputItemUnionParam{OfInputFile: &file})
+		default:
+			return nil, openAIContentError("tool result", i, fmt.Sprintf("%T", block), fmt.Errorf("content type is not supported"))
 		}
 	}
-	return out
+	return out, nil
 }
 
-func openAIAssistantInput(msg AssistantMessage) []responses.ResponseInputItemUnionParam {
+func openAIAssistantInput(msg AssistantMessage) ([]responses.ResponseInputItemUnionParam, error) {
 	var out []responses.ResponseInputItemUnionParam
-	for _, block := range msg.Content {
+	for i, block := range msg.Content {
 		switch value := block.(type) {
 		case ThinkingContent:
 			if reasoning, ok := signedReasoningItem(value.Signature); ok {
@@ -422,9 +481,101 @@ func openAIAssistantInput(msg AssistantMessage) []responses.ResponseInputItemUni
 			if msg.StopReason == StopReasonToolUse {
 				out = append(out, responses.ResponseInputItemParamOfFunctionCall(string(value.Arguments), value.ID, value.Name))
 			}
+		default:
+			return nil, openAIContentError("assistant", i, fmt.Sprintf("%T", block), fmt.Errorf("content type is not supported"))
 		}
 	}
-	return out
+	return out, nil
+}
+
+func openAIImageParam(image ImageContent) (responses.ResponseInputImageParam, error) {
+	if err := validateImageContent(image); err != nil {
+		return responses.ResponseInputImageParam{}, err
+	}
+	return responses.ResponseInputImageParam{
+		Detail:   responses.ResponseInputImageDetailAuto,
+		ImageURL: param.NewOpt(image.URL),
+	}, nil
+}
+
+func openAIToolImageParam(image ImageContent) (responses.ResponseInputImageContentParam, error) {
+	if err := validateImageContent(image); err != nil {
+		return responses.ResponseInputImageContentParam{}, err
+	}
+	return responses.ResponseInputImageContentParam{
+		Detail:   responses.ResponseInputImageContentDetailAuto,
+		ImageURL: param.NewOpt(image.URL),
+	}, nil
+}
+
+func openAIFileParam(file FileContent) (responses.ResponseInputFileParam, error) {
+	if err := validateFileContent(file); err != nil {
+		return responses.ResponseInputFileParam{}, err
+	}
+	kind, _ := contentSourceScheme(file.URL)
+	input := responses.ResponseInputFileParam{
+		Detail: responses.ResponseInputFileDetailAuto,
+	}
+	if kind == "data" {
+		input.FileData = param.NewOpt(file.URL)
+		input.Filename = param.NewOpt(file.Filename)
+	} else {
+		// OpenAI treats filename as mutually exclusive with URL-backed input.
+		// The signed URL remains model-facing only; filename is required only
+		// for inline file_data.
+		input.FileURL = param.NewOpt(file.URL)
+	}
+	return input, nil
+}
+
+func openAIToolFileParam(file FileContent) (responses.ResponseInputFileContentParam, error) {
+	if err := validateFileContent(file); err != nil {
+		return responses.ResponseInputFileContentParam{}, err
+	}
+	kind, _ := contentSourceScheme(file.URL)
+	input := responses.ResponseInputFileContentParam{
+		Detail: responses.ResponseInputFileContentDetailAuto,
+	}
+	if kind == "data" {
+		input.FileData = param.NewOpt(file.URL)
+		input.Filename = param.NewOpt(file.Filename)
+	} else {
+		input.FileURL = param.NewOpt(file.URL)
+	}
+	return input, nil
+}
+
+func validateImageContent(image ImageContent) error {
+	if err := validateImageMediaType(image.MediaType); err != nil {
+		return err
+	}
+	return validateContentSource(image.URL, image.MediaType)
+}
+
+func validateFileContent(file FileContent) error {
+	if err := validateFileMetadata(file.Filename, file.MediaType); err != nil {
+		return err
+	}
+	return validateContentSource(file.URL, file.MediaType)
+}
+
+func contentSourceScheme(rawURL string) (string, error) {
+	if err := validateContentURL(rawURL); err != nil {
+		return "", err
+	}
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return "", err
+	}
+	return strings.ToLower(parsed.Scheme), nil
+}
+
+func isImageMediaType(mediaType string) bool {
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(mediaType)), "image/")
+}
+
+func openAIContentError(role string, index int, contentType string, err error) error {
+	return fmt.Errorf("openai: unsupported %s content at index %d (%s): %w", role, index, contentType, err)
 }
 
 func signedReasoningItem(signature string) (responses.ResponseReasoningItemParam, bool) {

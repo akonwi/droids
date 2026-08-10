@@ -116,6 +116,36 @@ providers, _ := droids.NewProviders(
 gw.OpenAICompatible("provider-slug", droids.OpenAI{APIKey: key, ID: "provider", Models: ...})
 ```
 
+## Images and files
+
+User messages can carry unnamed images and named files from HTTPS or inline
+data URLs. Applications remain responsible for storing, authorizing, and
+resolving durable attachment records before constructing messages.
+
+```go
+report, err := droids.NewFileURL(
+	"report.pdf",
+	"application/pdf",
+	"https://files.example/report.pdf?signature=...",
+)
+if err != nil {
+	return err
+}
+
+message := droids.UserMessage{Content: []droids.Content{
+	droids.TextContent{Text: "Summarize this report."},
+	report,
+	droids.NewImageData("image/png", imageBytes),
+}}
+run, err := droid.StreamMessage(ctx, message)
+```
+
+OpenAI Responses maps named images to image inputs and other files to file
+inputs. Provider/model attachment support remains authoritative; unsupported
+content produces a `StreamError` rather than being discarded. Signed URLs
+should be regenerated when rebuilding a transcript, not persisted as durable
+application attachment identifiers.
+
 ## Tools
 
 Tools are generic over their argument type; the JSON Schema is derived from the

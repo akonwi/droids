@@ -92,8 +92,8 @@ for ev := range d.Events() {
 ## Neutral vocabulary
 
 Messages (`UserMessage`, `AssistantMessage`, `ToolResultMessage`) and content
-blocks (`TextContent`, `ThinkingContent`, `ImageContent`, `ToolCall`) are
-provider-neutral. Providers translate to/from their wire format at the edge;
+blocks (`TextContent`, `ThinkingContent`, `ImageContent`, `FileContent`,
+`ToolCall`) are provider-neutral. Providers translate to/from their wire format at the edge;
 the loop and storage only ever see these types. `Providers.Stream` emits a
 `StreamEvent` protocol (start / deltas / done / error) that assembles into one
 `AssistantMessage`; the loop re-emits higher-level agent `Event`s.

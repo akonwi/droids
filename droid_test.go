@@ -73,6 +73,50 @@ func TestRunSingleTurn(t *testing.T) {
 	}
 }
 
+func TestCloneUserMessageCopiesContentSlice(t *testing.T) {
+	message := UserMessage{Content: []Content{TextContent{Text: "original"}}}
+	cloned := cloneUserMessage(message)
+	message.Content[0] = TextContent{Text: "mutated"}
+	if got := cloned.Content[0].(TextContent).Text; got != "original" {
+		t.Fatalf("cloned content = %q", got)
+	}
+}
+
+func TestStreamMessagePreservesStructuredUserContent(t *testing.T) {
+	var received UserMessage
+	providers, err := NewProviders(fauxProvider{
+		model: Model{ID: "m"},
+		reply: func(req Request) AssistantMessage {
+			received = req.Messages[len(req.Messages)-1].(UserMessage)
+			return AssistantMessage{Content: []Content{TextContent{Text: "done"}}, StopReason: StopReasonStop}
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, err := New(Options{Providers: providers, Model: "m"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+
+	file := NewFileData("notes.txt", "text/plain", []byte("hello"))
+	run, err := d.StreamMessage(context.Background(), UserMessage{Content: []Content{
+		TextContent{Text: "Read this"}, file,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range run.Events() {
+	}
+	if _, err := run.Result(); err != nil {
+		t.Fatal(err)
+	}
+	if len(received.Content) != 2 || received.Content[1] != file {
+		t.Fatalf("provider received %#v", received.Content)
+	}
+}
+
 func TestRunDoesNotExecuteToolCallsWithoutToolUseStop(t *testing.T) {
 	providerCalls := 0
 	toolCalls := 0

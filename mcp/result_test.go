@@ -26,7 +26,7 @@ func TestConvertCallResult(t *testing.T) {
 		t.Fatalf("text = %q", got)
 	}
 	image := result.Content[1].(droids.ImageContent)
-	if image.Data != "AQID" || image.MimeType != "image/png" {
+	if image.URL != "data:image/png;base64,AQID" || image.MediaType != "image/png" {
 		t.Fatalf("unexpected image: %+v", image)
 	}
 }

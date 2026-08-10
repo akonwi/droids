@@ -3,6 +3,7 @@ package droids
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
@@ -82,6 +83,22 @@ func (p *anthropicProvider) stream(ctx context.Context, model Model, req Request
 func (p *anthropicProvider) run(ctx context.Context, model Model, req Request, s *pipeStream) {
 	defer s.finish()
 
+	partial := AssistantMessage{Provider: model.Provider, Model: model.ID, Timestamp: time.Now().UnixMilli()}
+	s.emit(StreamStart{Partial: partial})
+
+	if err := validateAnthropicContent(req.Messages); err != nil {
+		final := AssistantMessage{
+			Provider:     model.Provider,
+			Model:        model.ID,
+			StopReason:   StopReasonError,
+			ErrorMessage: err.Error(),
+			Timestamp:    time.Now().UnixMilli(),
+		}
+		s.final = final
+		s.emit(StreamError{Message: final})
+		return
+	}
+
 	maxTokens := int64(req.MaxTokens)
 	if maxTokens <= 0 {
 		maxTokens = int64(model.MaxTokens)
@@ -111,9 +128,6 @@ func (p *anthropicProvider) run(ctx context.Context, model Model, req Request, s
 		}
 		params.Thinking = anthropic.ThinkingConfigParamOfEnabled(budget)
 	}
-
-	partial := AssistantMessage{Provider: model.Provider, Model: model.ID, Timestamp: time.Now().UnixMilli()}
-	s.emit(StreamStart{Partial: partial})
 
 	stream := p.client.Messages.NewStreaming(ctx, params)
 	var acc anthropic.Message
@@ -207,6 +221,28 @@ func assembleAnthropicMessage(model Model, acc anthropic.Message) AssistantMessa
 		TotalTokens: int(acc.Usage.InputTokens + acc.Usage.OutputTokens),
 	}
 	return msg
+}
+
+func validateAnthropicContent(messages []Message) error {
+	for _, message := range messages {
+		var role string
+		var content []Content
+		switch msg := message.(type) {
+		case UserMessage:
+			role, content = "user", msg.Content
+		case ToolResultMessage:
+			role, content = "tool result", msg.Content
+		case AssistantMessage:
+			role, content = "assistant", msg.Content
+		}
+		for i, block := range content {
+			switch block.(type) {
+			case ImageContent, FileContent:
+				return fmt.Errorf("anthropic: unsupported %s content at index %d (%T): native attachment translation is not implemented", role, i, block)
+			}
+		}
+	}
+	return nil
 }
 
 func toAnthropicMessages(messages []Message) []anthropic.MessageParam {
