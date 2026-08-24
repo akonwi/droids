@@ -87,7 +87,7 @@ func TestOpenAIResponsesStreamsTextAndBuildsRequest(t *testing.T) {
 	}
 
 	request := <-requests
-	if request["model"] != "gpt-test" || request["instructions"] != "Be concise." || request["store"] != false || request["stream"] != true {
+	if request["model"] != "gpt-5-mini" || request["instructions"] != "Be concise." || request["store"] != false || request["stream"] != true {
 		t.Fatalf("request controls = %#v", request)
 	}
 	if request["max_output_tokens"] != float64(128) || request["temperature"] != 0.25 {
@@ -429,12 +429,11 @@ func testOpenAIProvider(t *testing.T, baseURL string) (Providers, Model) {
 	providers, err := NewProviders(OpenAI{
 		APIKey:  "test-key",
 		BaseURL: baseURL,
-		Models:  []Model{{ID: "gpt-test"}},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	model, ok := providers.Model("gpt-test")
+	model, ok := providers.Model("gpt-5-mini")
 	if !ok {
 		t.Fatal("test model did not resolve")
 	}

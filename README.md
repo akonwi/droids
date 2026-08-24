@@ -36,10 +36,7 @@ import (
 )
 
 func main() {
-	providers, err := droids.NewProviders(droids.OpenAI{
-		APIKey: "sk-...",
-		Models: []droids.Model{{ID: "gpt-4o-mini", MaxTokens: 1024}},
-	})
+	providers, err := droids.NewProviders(droids.OpenAI{APIKey: "sk-..."})
 	if err != nil {
 		panic(err)
 	}
@@ -61,6 +58,7 @@ func main() {
 		Model:        "gpt-4o-mini",
 		SystemPrompt: "You are concise.",
 		Tools:        []droids.AnyTool{weather},
+		MaxTokens:    1024,
 	})
 	if err != nil {
 		panic(err)
@@ -83,8 +81,8 @@ each request to the provider that owns the model. Model ids resolve bare
 
 ```go
 providers, _ := droids.NewProviders(
-	droids.OpenAI{APIKey: openaiKey, Models: []droids.Model{{ID: "gpt-4o"}}},
-	droids.Anthropic{APIKey: anthropicKey, Models: []droids.Model{{ID: "claude-3-5-sonnet-latest"}}},
+	droids.OpenAI{APIKey: openaiKey},
+	droids.Anthropic{APIKey: anthropicKey},
 )
 ```
 
@@ -93,27 +91,41 @@ providers, _ := droids.NewProviders(
 | OpenAI Responses (and Responses-compatible endpoints) | `droids.OpenAI{}` | `openai-go` |
 | Anthropic Messages | `droids.Anthropic{}` | `anthropic-sdk-go` |
 
-Both take `APIKey`, `BaseURL`, `Headers`, and `Models`. Point `OpenAI.BaseURL`
-at an endpoint that implements the OpenAI Responses API; point
-`Anthropic.BaseURL` at an Anthropic Messages-compatible endpoint.
+Each provider owns an embedded models.dev catalog containing model context and
+input/output limits, reasoning support, modalities, and pricing. Callers do not
+register model metadata. `OpenAIModels`/`OpenAIModel` and
+`AnthropicModels`/`AnthropicModel` expose fresh copies of the built-in entries.
+
+Refresh the registered catalogs explicitly when current models are needed:
+
+```go
+if err := providers.RefreshModels(ctx); err != nil {
+	// The embedded catalog remains usable.
+}
+```
+
+Refreshes fetch `https://models.dev/api.json`, overlay complete entries, and
+leave the previous catalog unchanged on failure. Maintainers update the
+embedded fallback with `go generate ./...`. A refresh affects subsequent
+model resolutions and newly created Droids; an existing Droid retains the model
+metadata resolved when it was created. Point `OpenAI.BaseURL` at a proxy for the
+OpenAI Responses model family, and `Anthropic.BaseURL` at a proxy for the
+Anthropic Messages model family.
 
 ### Cloudflare AI Gateway
 
 The gateway is transport in front of the real providers, so it's a decorator
 over the provider configs. The native Cloudflare `openai` endpoint supports the
-Responses API; Cloudflare's legacy unified `compat` endpoint is Chat
-Completions-only and is not compatible with the Responses-backed provider:
+Responses API and retains the OpenAI model catalog:
 
 ```go
 gw := droids.CloudflareGateway{AccountID: "...", GatewayID: "...", Token: "..."}
 
 providers, _ := droids.NewProviders(
-	gw.OpenAI(droids.OpenAI{APIKey: openaiKey, Models: ...}),
-	gw.Anthropic(droids.Anthropic{APIKey: anthropicKey, Models: ...}),
+	gw.OpenAI(droids.OpenAI{APIKey: openaiKey}),
+	gw.Anthropic(droids.Anthropic{APIKey: anthropicKey}),
 )
 
-// another gateway upstream that implements the Responses API:
-gw.OpenAICompatible("provider-slug", droids.OpenAI{APIKey: key, ID: "provider", Models: ...})
 ```
 
 ## Images and files
@@ -301,6 +313,54 @@ d, _ := droids.New(droids.Options{
 	Session:   "run-42",        // rehydrates on New
 })
 ```
+
+## Context compaction
+
+Droids can detect context pressure from the resolved model's `ContextWindow`,
+the rendered request, and reserved output capacity. Applications may provide an
+optional compaction hook that returns a smaller active transcript:
+
+```go
+d, err := droids.New(droids.Options{
+	Providers: providers,
+	Model:     "openai/gpt-5.4",
+	MaxTokens: 16_000,
+	Compact: func(ctx context.Context, req droids.CompactionRequest) (droids.CompactionResult, error) {
+		summary, err := summarizeAndPersist(ctx, req.Messages)
+		if err != nil {
+			return droids.CompactionResult{}, err
+		}
+		return droids.CompactionResult{
+			Applied: true,
+			Messages: append([]droids.Message{summary}, recentTail(req.Messages)...),
+		}, nil
+	},
+})
+```
+
+`Model.ContextWindow`, `Model.MaxInputTokens`, and `Model.MaxOutputTokens` are
+provider capabilities sourced from the catalog. `Options.MaxTokens` is the
+actual per-request output allowance and is capped by `MaxOutputTokens`. Zero
+defaults to 4096; reasoning modes requiring a larger allowance must set it
+explicitly.
+
+The hook runs proactively before the first provider request of a normal run
+when estimated input plus reserved output reaches 80% of the model context
+window, or when estimated input reaches 80% of a stricter input-only limit. It
+may also run once after a provider-confirmed input context overflow, followed
+by one retry. Omit `Compact` to keep the existing provider behavior.
+
+Droids replaces only its active in-memory context. It never deletes or rewrites
+`Storage`; durable applications own checkpoint persistence and should make
+future `Storage.Load` calls reconstruct the checkpoint plus its raw tail. Hook
+implementations may use another in-memory Droid with a fast summarization model,
+but that Droid should omit `Compact` to avoid recursive compaction.
+
+`CompactionStart` and `CompactionEnd` events expose context estimates and whether
+a replacement was applied without exposing summary content. Estimates are
+provider-neutral and currently approximate. The embedded catalogs provide the
+limits required for proactive detection; provider-overflow recovery remains the
+fallback.
 
 ## Human-in-the-loop continuation
 

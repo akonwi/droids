@@ -290,9 +290,10 @@ func (ToolResultMessage) Role() Role { return RoleToolResult }
 type StopReason string
 
 const (
-	StopReasonStop    StopReason = "stop"
-	StopReasonLength  StopReason = "length"
-	StopReasonToolUse StopReason = "toolUse"
-	StopReasonError   StopReason = "error"
-	StopReasonAborted StopReason = "aborted"
+	StopReasonStop          StopReason = "stop"
+	StopReasonLength        StopReason = "length"
+	StopReasonToolUse       StopReason = "toolUse"
+	StopReasonContextWindow StopReason = "contextWindow"
+	StopReasonError         StopReason = "error"
+	StopReasonAborted       StopReason = "aborted"
 )

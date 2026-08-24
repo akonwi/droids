@@ -35,34 +35,6 @@ func TestCloudflareGatewayAnthropic(t *testing.T) {
 	}
 }
 
-func TestCloudflareGatewayOpenAICompatibleSlug(t *testing.T) {
-	gw := CloudflareGateway{AccountID: "acct", GatewayID: "gw"}
-	cfg := gw.OpenAICompatible("groq", OpenAI{APIKey: "sk", ID: "groq"})
-	if want := "https://gateway.ai.cloudflare.com/v1/acct/gw/groq"; cfg.BaseURL != want {
-		t.Fatalf("BaseURL = %q, want %q", cfg.BaseURL, want)
-	}
-}
-
-func TestCloudflareGatewayCompat(t *testing.T) {
-	gw := CloudflareGateway{AccountID: "acct", GatewayID: "gw"}
-	cfg := gw.Compat(OpenAI{
-		APIKey: "sk",
-		Models: []Model{{ID: "anthropic/claude-3-5-sonnet"}},
-	})
-	if want := "https://gateway.ai.cloudflare.com/v1/acct/gw/compat"; cfg.BaseURL != want {
-		t.Fatalf("BaseURL = %q, want %q", cfg.BaseURL, want)
-	}
-
-	// A slash-containing model id resolves through the registry's bare-id index.
-	prov, err := NewProviders(cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, ok := prov.Model("anthropic/claude-3-5-sonnet"); !ok {
-		t.Fatal("compat model id did not resolve")
-	}
-}
-
 func TestCloudflareGatewayConfigHeaderWins(t *testing.T) {
 	gw := CloudflareGateway{
 		AccountID: "a", GatewayID: "g", Token: "gwtok",

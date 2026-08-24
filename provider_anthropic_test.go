@@ -7,6 +7,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/anthropics/anthropic-sdk-go"
 )
 
 // Verify neutral messages/tools translate to the Anthropic wire shape.
@@ -53,12 +55,12 @@ func TestAnthropicRejectsAttachmentsWithoutRequest(t *testing.T) {
 	defer server.Close()
 
 	providers, err := NewProviders(Anthropic{
-		APIKey: "test-key", BaseURL: server.URL, Models: []Model{{ID: "claude-test"}},
+		APIKey: "test-key", BaseURL: server.URL,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	model, ok := providers.Model("claude-test")
+	model, ok := providers.Model("claude-haiku-4-5")
 	if !ok {
 		t.Fatal("test model did not resolve")
 	}
@@ -89,6 +91,39 @@ func TestAnthropicRejectsAttachmentsWithoutRequest(t *testing.T) {
 	}
 }
 
+func TestAnthropicDoesNotRaiseMaxTokensForReasoning(t *testing.T) {
+	requested := make(chan struct{}, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		requested <- struct{}{}
+	}))
+	defer server.Close()
+
+	providers, err := NewProviders(Anthropic{APIKey: "test-key", BaseURL: server.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	model, ok := providers.Model("claude-haiku-4-5")
+	if !ok {
+		t.Fatal("test model did not resolve")
+	}
+	stream := providers.Stream(context.Background(), model, Request{
+		Messages:  []Message{UserMessage{Content: []Content{TextContent{Text: "hi"}}}},
+		Reasoning: "high",
+		MaxTokens: 4096,
+	})
+	for range stream.Events() {
+	}
+	message := stream.Result()
+	if message.StopReason != StopReasonError || !strings.Contains(message.ErrorMessage, "must exceed") || !strings.Contains(message.ErrorMessage, "reasoning budget") {
+		t.Fatalf("message = %#v", message)
+	}
+	select {
+	case <-requested:
+		t.Fatal("invalid reasoning allowance reached provider")
+	default:
+	}
+}
+
 func TestAnthropicToolConversion(t *testing.T) {
 	tools := []ToolSchema{{
 		Name:        "get_weather",
@@ -111,11 +146,23 @@ func TestAnthropicToolConversion(t *testing.T) {
 	}
 }
 
-func TestThinkingBudget(t *testing.T) {
-	if thinkingBudget("off") != 0 {
+func TestAnthropicContextWindowStopIsStreamError(t *testing.T) {
+	message := assembleAnthropicMessage(Model{ID: "claude-test"}, anthropic.Message{
+		StopReason: anthropic.StopReasonModelContextWindowExceeded,
+	})
+	if message.StopReason != StopReasonContextWindow {
+		t.Fatalf("stop reason = %q", message.StopReason)
+	}
+	if _, ok := anthropicTerminalEvent(message).(StreamError); !ok {
+		t.Fatalf("terminal event = %T, want StreamError", anthropicTerminalEvent(message))
+	}
+}
+
+func TestReasoningTokenBudget(t *testing.T) {
+	if reasoningTokenBudget("off") != 0 {
 		t.Fatal("off should disable thinking")
 	}
-	if thinkingBudget("high") <= thinkingBudget("low") {
+	if reasoningTokenBudget("high") <= reasoningTokenBudget("low") {
 		t.Fatal("high budget should exceed low")
 	}
 }

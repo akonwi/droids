@@ -12,8 +12,8 @@ import "fmt"
 //
 //	gw := droids.CloudflareGateway{AccountID: "...", GatewayID: "..."}
 //	providers, _ := droids.NewProviders(
-//		gw.OpenAI(droids.OpenAI{APIKey: openaiKey, Models: ...}),
-//		gw.Anthropic(droids.Anthropic{APIKey: anthropicKey, Models: ...}),
+//		gw.OpenAI(droids.OpenAI{APIKey: openaiKey}),
+//		gw.Anthropic(droids.Anthropic{APIKey: anthropicKey}),
 //	)
 type CloudflareGateway struct {
 	// AccountID is the Cloudflare account id.
@@ -48,32 +48,13 @@ func (g CloudflareGateway) gatewayHeaders() map[string]string {
 	return h
 }
 
-// OpenAI routes an OpenAI config through the gateway's `openai` endpoint,
-// merging the gateway headers (config headers win on conflict).
+// OpenAI routes an OpenAI config through the gateway's native `openai`
+// endpoint, merging the gateway headers (config headers win on conflict).
+// The provider retains the built-in OpenAI Responses model catalog.
 func (g CloudflareGateway) OpenAI(cfg OpenAI) OpenAI {
-	return g.OpenAICompatible("openai", cfg)
-}
-
-// OpenAICompatible routes an OpenAI config through an arbitrary gateway provider
-// slug. The selected upstream must implement the OpenAI Responses API. Set
-// cfg.ID to a distinct provider id when registering several alongside each
-// other.
-func (g CloudflareGateway) OpenAICompatible(slug string, cfg OpenAI) OpenAI {
-	cfg.BaseURL = g.baseURL(slug)
+	cfg.BaseURL = g.baseURL("openai")
 	cfg.Headers = mergeHeaders(g.gatewayHeaders(), cfg.Headers)
 	return cfg
-}
-
-// Compat points an OpenAI config at Cloudflare's legacy unified `compat`
-// endpoint.
-//
-// Deprecated: Cloudflare documents this endpoint for Chat Completions, while
-// OpenAI now uses the Responses API. Use OpenAI for the native Cloudflare
-// `openai` endpoint, or configure OpenAI.BaseURL for Cloudflare's Responses-
-// compatible REST API. Compat is retained only to avoid removing the public
-// decorator while callers migrate.
-func (g CloudflareGateway) Compat(cfg OpenAI) OpenAI {
-	return g.OpenAICompatible("compat", cfg)
 }
 
 // Anthropic routes an Anthropic config through the gateway's `anthropic`

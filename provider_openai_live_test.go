@@ -21,7 +21,7 @@ func TestLiveOpenAIResponses(t *testing.T) {
 	}
 
 	t.Run("direct", func(t *testing.T) {
-		testLiveOpenAIResponses(t, OpenAI{APIKey: apiKey, Models: []Model{{ID: modelID}}}, modelID)
+		testLiveOpenAIResponses(t, OpenAI{APIKey: apiKey}, modelID)
 	})
 
 	t.Run("cloudflare gateway", func(t *testing.T) {
@@ -35,10 +35,7 @@ func TestLiveOpenAIResponses(t *testing.T) {
 			GatewayID: gatewayID,
 			Token:     os.Getenv("CLOUDFLARE_AI_GATEWAY_TOKEN"),
 		}
-		testLiveOpenAIResponses(t, gateway.OpenAI(OpenAI{
-			APIKey: apiKey,
-			Models: []Model{{ID: modelID}},
-		}), modelID)
+		testLiveOpenAIResponses(t, gateway.OpenAI(OpenAI{APIKey: apiKey}), modelID)
 	})
 }
 
@@ -49,6 +46,15 @@ func testLiveOpenAIResponses(t *testing.T, config OpenAI, modelID string) {
 		t.Fatal(err)
 	}
 	model, ok := providers.Model(modelID)
+	if !ok {
+		refreshCtx, refreshCancel := context.WithTimeout(context.Background(), 15*time.Second)
+		err := providers.RefreshModels(refreshCtx)
+		refreshCancel()
+		if err != nil {
+			t.Fatalf("refresh models: %v", err)
+		}
+		model, ok = providers.Model(modelID)
+	}
 	if !ok {
 		t.Fatalf("model %q did not resolve", modelID)
 	}
