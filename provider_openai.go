@@ -19,6 +19,8 @@ import (
 // openai-go SDK. Cloudflare AI Gateway and other Responses-compatible
 // endpoints are just a custom BaseURL + Headers.
 
+const defaultOpenAIBaseURL = "https://api.openai.com/v1"
+
 // OpenAI configures an OpenAI Responses provider.
 type OpenAI struct {
 	// APIKey authenticates requests (sent as a Bearer token).
@@ -29,8 +31,6 @@ type OpenAI struct {
 	// Headers are extra headers merged into every request (e.g. AI Gateway
 	// metadata).
 	Headers map[string]string
-	// Models is the catalog this provider serves.
-	Models []Model
 	// ID overrides the provider id. Default: "openai".
 	ID string
 	// Options are extra SDK request options, applied after the built-ins.
@@ -57,20 +57,23 @@ func (c OpenAI) build() (providerEntry, error) {
 
 	client := openai.NewClient(opts...)
 
+	baseURL := c.BaseURL
+	if baseURL == "" {
+		baseURL = defaultOpenAIBaseURL
+	}
 	models := map[string]Model{}
-	for _, m := range c.Models {
-		m.Provider = id
-		if m.BaseURL == "" {
-			m.BaseURL = c.BaseURL
-		}
-		models[m.ID] = m
+	for _, model := range catalogModels(builtinModelCatalog, "openai", id) {
+		model.BaseURL = baseURL
+		models[model.ID] = model
 	}
 
 	impl := &openAIProvider{client: &client}
 	return providerEntry{
-		id:     id,
-		models: models,
-		stream: impl.stream,
+		id:        id,
+		catalogID: "openai",
+		baseURL:   baseURL,
+		models:    models,
+		stream:    impl.stream,
 	}, nil
 }
 
@@ -92,6 +95,13 @@ func (p *openAIProvider) run(ctx context.Context, model Model, req Request, s *p
 
 	partial := AssistantMessage{Provider: model.Provider, Model: model.ID, Timestamp: time.Now().UnixMilli()}
 	s.emit(StreamStart{Partial: partial})
+
+	if err := validateReasoning(model, req.Reasoning); err != nil {
+		final := responseErrorMessage(model, ctx, err.Error())
+		s.final = final
+		s.emit(StreamError{Message: final})
+		return
+	}
 
 	input, err := toOpenAIInput(req.Messages)
 	if err != nil {
@@ -125,7 +135,7 @@ func (p *openAIProvider) run(ctx context.Context, model Model, req Request, s *p
 	if req.Temperature != nil {
 		params.Temperature = param.NewOpt(*req.Temperature)
 	}
-	if eff := reasoningEffort(req.Reasoning); eff != "" {
+	if eff := reasoningEffort(req.Reasoning); eff != "" && model.Reasoning {
 		params.Reasoning.Effort = eff
 		if eff != shared.ReasoningEffortNone {
 			params.Reasoning.Summary = shared.ReasoningSummaryAuto
@@ -211,7 +221,7 @@ func (p *openAIProvider) run(ctx context.Context, model Model, req Request, s *p
 			return
 
 		case responses.ResponseErrorEvent:
-			final := responseErrorMessage(model, ctx, e.Message)
+			final := responseErrorMessageWithCode(model, ctx, e.Code, e.Message)
 			s.final = final
 			s.emit(StreamError{Message: final})
 			return
@@ -219,7 +229,7 @@ func (p *openAIProvider) run(ctx context.Context, model Model, req Request, s *p
 	}
 
 	if err := stream.Err(); err != nil {
-		final := responseErrorMessage(model, ctx, err.Error())
+		final := responseErrorMessageWithCode(model, ctx, "", err.Error())
 		s.final = final
 		s.emit(StreamError{Message: final})
 		return
@@ -301,6 +311,9 @@ func assembleResponse(model Model, response responses.Response) AssistantMessage
 	} else if response.Status == responses.ResponseStatusFailed {
 		msg.StopReason = StopReasonError
 		msg.ErrorMessage = response.Error.Message
+		if isContextWindowError(string(response.Error.Code), response.Error.Message) {
+			msg.StopReason = StopReasonContextWindow
+		}
 	} else if hasToolCall {
 		msg.StopReason = StopReasonToolUse
 	}
@@ -347,10 +360,18 @@ func responseReasoningText(item responses.ResponseReasoningItem) string {
 }
 
 func responseErrorMessage(model Model, ctx context.Context, message string) AssistantMessage {
+	return responseErrorMessageWithCode(model, ctx, "", message)
+}
+
+func responseErrorMessageWithCode(model Model, ctx context.Context, code, message string) AssistantMessage {
+	reason := stopReasonForError(ctx)
+	if reason != StopReasonAborted && isContextWindowError(code, message) {
+		reason = StopReasonContextWindow
+	}
 	return AssistantMessage{
 		Provider:     model.Provider,
 		Model:        model.ID,
-		StopReason:   stopReasonForError(ctx),
+		StopReason:   reason,
 		ErrorMessage: message,
 		Timestamp:    time.Now().UnixMilli(),
 	}

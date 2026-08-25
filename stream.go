@@ -93,8 +93,8 @@ type StreamDone struct{ Message AssistantMessage }
 
 func (StreamDone) isStreamEvent() {}
 
-// StreamError terminates a failed/aborted stream. Message carries StopReason
-// error/aborted and an ErrorMessage.
+// StreamError terminates a failed, context-overflowed, or aborted stream.
+// Message carries the corresponding StopReason and an ErrorMessage.
 type StreamError struct{ Message AssistantMessage }
 
 func (StreamError) isStreamEvent() {}

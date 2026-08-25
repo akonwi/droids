@@ -26,7 +26,8 @@ and grows outward.
 | File | Responsibility |
 |------|----------------|
 | `message.go` | Neutral conversation vocabulary: `Message`, content blocks. |
-| `model.go` | `Model` metadata, `Usage`/cost accounting. |
+| `model.go` | `Model` metadata, request output limits, `Usage`/cost accounting. |
+| `model_catalog.go` / `model_catalog.json` | Embedded models.dev catalog, known-model accessors, dynamic refresh translation. |
 | `stream.go` | Provider streaming contract: `Request`, `StreamEvent`, `Stream`. |
 | `provider.go` | `Providers` registry + `NewProviders` (routes by model); `Provider` config interface. |
 | `provider_openai.go` | OpenAI Responses provider, backed by `openai-go`. |

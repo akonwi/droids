@@ -62,6 +62,7 @@ func main() {
 		Model:        model,
 		SystemPrompt: "You are a helpful, concise CLI assistant with read-only filesystem access. Use MCP namespace tools progressively: list or search, describe unfamiliar tools, then call them.",
 		Tools:        tools,
+		MaxTokens:    1024,
 	})
 	if err != nil {
 		fatal(err)
@@ -152,12 +153,9 @@ func selectProvider() (droids.Provider, string, error) {
 	model := os.Getenv("DROIDS_MODEL")
 	if key := os.Getenv("ANTHROPIC_API_KEY"); key != "" {
 		if model == "" {
-			model = "claude-3-5-haiku-latest"
+			model = "claude-haiku-4-5"
 		}
-		return droids.Anthropic{
-			APIKey: key,
-			Models: []droids.Model{{ID: model, MaxTokens: 1024}},
-		}, model, nil
+		return droids.Anthropic{APIKey: key}, model, nil
 	}
 	if key := os.Getenv("OPENAI_API_KEY"); key != "" {
 		if model == "" {
@@ -166,7 +164,6 @@ func selectProvider() (droids.Provider, string, error) {
 		return droids.OpenAI{
 			APIKey:  key,
 			BaseURL: os.Getenv("DROIDS_BASE_URL"),
-			Models:  []droids.Model{{ID: model, MaxTokens: 1024}},
 		}, model, nil
 	}
 	return nil, "", fmt.Errorf("set OPENAI_API_KEY or ANTHROPIC_API_KEY")

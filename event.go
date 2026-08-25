@@ -6,6 +6,7 @@ package droids
 // type-switch on concrete variants. A run produces:
 //
 //	AgentStart
+//	  CompactionStart / CompactionEnd  (optional, before a turn)
 //	  TurnStart
 //	    MessageStart / MessageDelta* / MessageEnd   (assistant + injected msgs)
 //	    ToolExecutionStart / ToolExecutionUpdate* / ToolExecutionEnd  (per call)
@@ -21,11 +22,31 @@ type AgentStart struct{}
 
 func (AgentStart) isEvent() {}
 
-// AgentEnd is emitted once when a run finishes. Messages are everything the
-// run appended to the transcript.
+// AgentEnd is emitted once when a run finishes. Messages is the active
+// transcript snapshot, including any context replacement applied by compaction.
 type AgentEnd struct{ Messages []Message }
 
 func (AgentEnd) isEvent() {}
+
+// CompactionStart is emitted immediately before the application compaction
+// hook runs. Summary content is deliberately excluded.
+type CompactionStart struct {
+	Reason CompactionReason
+	Usage  ContextUsage
+}
+
+func (CompactionStart) isEvent() {}
+
+// CompactionEnd reports whether a hook replaced the active context and how its
+// estimated usage changed. It is also emitted when the hook fails or declines.
+type CompactionEnd struct {
+	Reason  CompactionReason
+	Before  ContextUsage
+	After   ContextUsage
+	Applied bool
+}
+
+func (CompactionEnd) isEvent() {}
 
 // TurnStart marks the beginning of one assistant turn.
 type TurnStart struct{}

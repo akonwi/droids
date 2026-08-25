@@ -14,6 +14,8 @@ import (
 // provider_anthropic.go — the Anthropic (Messages API) provider, backed by the
 // official anthropic-sdk-go. API-key auth only for now.
 
+const defaultAnthropicBaseURL = "https://api.anthropic.com"
+
 // Anthropic configures an Anthropic Messages provider.
 type Anthropic struct {
 	// APIKey authenticates requests (x-api-key header).
@@ -22,8 +24,6 @@ type Anthropic struct {
 	BaseURL string
 	// Headers are extra headers merged into every request.
 	Headers map[string]string
-	// Models is the catalog this provider serves.
-	Models []Model
 	// ID overrides the provider id. Default: "anthropic".
 	ID string
 	// Options are extra SDK request options, applied after the built-ins.
@@ -50,20 +50,23 @@ func (c Anthropic) build() (providerEntry, error) {
 
 	client := anthropic.NewClient(opts...)
 
+	baseURL := c.BaseURL
+	if baseURL == "" {
+		baseURL = defaultAnthropicBaseURL
+	}
 	models := map[string]Model{}
-	for _, m := range c.Models {
-		m.Provider = id
-		if m.BaseURL == "" {
-			m.BaseURL = c.BaseURL
-		}
-		models[m.ID] = m
+	for _, model := range catalogModels(builtinModelCatalog, "anthropic", id) {
+		model.BaseURL = baseURL
+		models[model.ID] = model
 	}
 
 	impl := &anthropicProvider{client: &client}
 	return providerEntry{
-		id:     id,
-		models: models,
-		stream: impl.stream,
+		id:        id,
+		catalogID: "anthropic",
+		baseURL:   baseURL,
+		models:    models,
+		stream:    impl.stream,
 	}, nil
 }
 
@@ -86,6 +89,19 @@ func (p *anthropicProvider) run(ctx context.Context, model Model, req Request, s
 	partial := AssistantMessage{Provider: model.Provider, Model: model.ID, Timestamp: time.Now().UnixMilli()}
 	s.emit(StreamStart{Partial: partial})
 
+	if err := validateReasoning(model, req.Reasoning); err != nil {
+		final := AssistantMessage{
+			Provider:     model.Provider,
+			Model:        model.ID,
+			StopReason:   StopReasonError,
+			ErrorMessage: err.Error(),
+			Timestamp:    time.Now().UnixMilli(),
+		}
+		s.final = final
+		s.emit(StreamError{Message: final})
+		return
+	}
+
 	if err := validateAnthropicContent(req.Messages); err != nil {
 		final := AssistantMessage{
 			Provider:     model.Provider,
@@ -101,10 +117,10 @@ func (p *anthropicProvider) run(ctx context.Context, model Model, req Request, s
 
 	maxTokens := int64(req.MaxTokens)
 	if maxTokens <= 0 {
-		maxTokens = int64(model.MaxTokens)
-	}
-	if maxTokens <= 0 {
-		maxTokens = 4096
+		maxTokens = defaultRequestMaxTokens
+		if model.MaxOutputTokens > 0 && maxTokens > int64(model.MaxOutputTokens) {
+			maxTokens = int64(model.MaxOutputTokens)
+		}
 	}
 
 	params := anthropic.MessageNewParams{
@@ -121,10 +137,20 @@ func (p *anthropicProvider) run(ctx context.Context, model Model, req Request, s
 	if req.Temperature != nil {
 		params.Temperature = param.NewOpt(*req.Temperature)
 	}
-	if budget := thinkingBudget(req.Reasoning); budget > 0 && model.Reasoning {
-		// Anthropic requires max_tokens > thinking budget.
+	if budget := reasoningTokenBudget(req.Reasoning); budget > 0 && model.Reasoning {
+		// Anthropic requires max_tokens to include and exceed the thinking
+		// budget. Do not silently change the caller's output allowance.
 		if params.MaxTokens <= budget {
-			params.MaxTokens = budget + 1024
+			final := AssistantMessage{
+				Provider:     model.Provider,
+				Model:        model.ID,
+				StopReason:   StopReasonError,
+				ErrorMessage: fmt.Sprintf("anthropic: max tokens %d must exceed reasoning budget %d", params.MaxTokens, budget),
+				Timestamp:    time.Now().UnixMilli(),
+			}
+			s.final = final
+			s.emit(StreamError{Message: final})
+			return
 		}
 		params.Thinking = anthropic.ThinkingConfigParamOfEnabled(budget)
 	}
@@ -141,10 +167,14 @@ func (p *anthropicProvider) run(ctx context.Context, model Model, req Request, s
 	}
 
 	if err := stream.Err(); err != nil {
+		reason := stopReasonForError(ctx)
+		if reason != StopReasonAborted && isContextWindowError("", err.Error()) {
+			reason = StopReasonContextWindow
+		}
 		final := AssistantMessage{
 			Provider:     model.Provider,
 			Model:        model.ID,
-			StopReason:   stopReasonForError(ctx),
+			StopReason:   reason,
 			ErrorMessage: err.Error(),
 			Timestamp:    time.Now().UnixMilli(),
 		}
@@ -155,7 +185,14 @@ func (p *anthropicProvider) run(ctx context.Context, model Model, req Request, s
 
 	final := assembleAnthropicMessage(model, acc)
 	s.final = final
-	s.emit(StreamDone{Message: final})
+	s.emit(anthropicTerminalEvent(final))
+}
+
+func anthropicTerminalEvent(message AssistantMessage) StreamEvent {
+	if message.StopReason == StopReasonError || message.StopReason == StopReasonContextWindow || message.StopReason == StopReasonAborted {
+		return StreamError{Message: message}
+	}
+	return StreamDone{Message: message}
 }
 
 // emitDelta translates one SDK stream event into droids StreamEvents.
@@ -209,6 +246,9 @@ func assembleAnthropicMessage(model Model, acc anthropic.Message) AssistantMessa
 		msg.StopReason = StopReasonToolUse
 	case anthropic.StopReasonMaxTokens:
 		msg.StopReason = StopReasonLength
+	case anthropic.StopReasonModelContextWindowExceeded:
+		msg.StopReason = StopReasonContextWindow
+		msg.ErrorMessage = "anthropic: model context window exceeded"
 	default:
 		msg.StopReason = StopReasonStop
 	}
@@ -308,21 +348,4 @@ func toStringSlice(in []any) []string {
 		}
 	}
 	return out
-}
-
-// thinkingBudget maps a reasoning level to an Anthropic thinking token budget.
-// 0 disables extended thinking.
-func thinkingBudget(level string) int64 {
-	switch level {
-	case "minimal":
-		return 1024
-	case "low":
-		return 4096
-	case "medium":
-		return 8192
-	case "high", "xhigh":
-		return 16384
-	default:
-		return 0
-	}
 }

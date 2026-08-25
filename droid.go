@@ -32,6 +32,10 @@ type Options struct {
 	// Reasoning selects a default thinking level for turns ("" = provider
 	// default, "none"/"off" = explicitly disabled, or "minimal"…"xhigh").
 	Reasoning string
+	// MaxTokens is the per-request output allowance. Zero defaults to 4096,
+	// capped by the selected model's MaxOutputTokens capability. Reasoning modes
+	// that require a larger allowance return a configuration error.
+	MaxTokens int
 
 	// ToolExecution sets the default execution mode for a batch of tool calls
 	// (ModeParallel | ModeSequential). Default: parallel. A batch runs
@@ -55,14 +59,21 @@ type Options struct {
 	// unchanged. A replacement's IsError becomes the final error status. A
 	// returned Go error degrades to an error tool result. Optional.
 	AfterToolCall func(ctx context.Context, in AfterToolContext) (*ToolResult, error)
+
+	// Compact is invoked before the first provider request of a run when the
+	// estimated context crosses Droids' compaction threshold, or once after a
+	// provider context-overflow error. Nil disables application compaction.
+	Compact CompactionHook
 }
 
 // Droid is a live agent session.
 type Droid struct {
-	opts      Options
-	providers Providers
-	model     Model
-	tools     map[string]AnyTool
+	opts              Options
+	providers         Providers
+	model             Model
+	maxTokens         int
+	compactionReserve int
+	tools             map[string]AnyTool
 
 	mu         sync.Mutex
 	transcript []Message
@@ -108,18 +119,23 @@ func New(opts Options) (*Droid, error) {
 	if opts.MaxSteps <= 0 {
 		opts.MaxSteps = 16
 	}
+	maxTokens, err := resolveRequestMaxTokens(model, opts.MaxTokens, opts.Reasoning)
+	if err != nil {
+		return nil, err
+	}
 	if opts.Storage == nil {
 		opts.Storage = NewMemoryStorage()
 	}
-
 	d := &Droid{
-		opts:      opts,
-		providers: opts.Providers,
-		model:     model,
-		tools:     map[string]AnyTool{},
-		accepting: true,
-		queue:     make(chan queuedPrompt, 64),
-		closed:    make(chan struct{}),
+		opts:              opts,
+		providers:         opts.Providers,
+		model:             model,
+		maxTokens:         maxTokens,
+		compactionReserve: maxTokens,
+		tools:             map[string]AnyTool{},
+		accepting:         true,
+		queue:             make(chan queuedPrompt, 64),
+		closed:            make(chan struct{}),
 	}
 	for _, t := range opts.Tools {
 		schema := t.schema()

@@ -26,7 +26,11 @@ func (f fauxProvider) build() (providerEntry, error) {
 			msg.Model = model.ID
 			ch := make(chan StreamEvent, 2)
 			ch <- StreamStart{Partial: AssistantMessage{Provider: "faux", Model: model.ID}}
-			ch <- StreamDone{Message: msg}
+			if msg.StopReason == StopReasonError || msg.StopReason == StopReasonContextWindow || msg.StopReason == StopReasonAborted {
+				ch <- StreamError{Message: msg}
+			} else {
+				ch <- StreamDone{Message: msg}
+			}
 			close(ch)
 			return &staticStream{events: ch, final: msg}
 		},
@@ -35,7 +39,7 @@ func (f fauxProvider) build() (providerEntry, error) {
 
 func TestRunSingleTurn(t *testing.T) {
 	prov, err := NewProviders(fauxProvider{
-		model: Model{ID: "test-model", MaxTokens: 100},
+		model: Model{ID: "test-model", MaxOutputTokens: 100},
 		reply: func(req Request) AssistantMessage {
 			return AssistantMessage{
 				Content:    []Content{TextContent{Text: "hello back"}},
@@ -70,6 +74,31 @@ func TestRunSingleTurn(t *testing.T) {
 	history, _ := store.Load(context.Background(), "s1")
 	if len(history) != 2 { // user + assistant
 		t.Fatalf("expected 2 persisted messages, got %d", len(history))
+	}
+}
+
+func TestOptionsMaxTokensIsPerRequestAllowance(t *testing.T) {
+	var request Request
+	providers, err := NewProviders(fauxProvider{
+		model: Model{ID: "m", MaxOutputTokens: 10_000},
+		reply: func(req Request) AssistantMessage {
+			request = req
+			return AssistantMessage{StopReason: StopReasonStop}
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, err := New(Options{Providers: providers, Model: "m", MaxTokens: 1234})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	if _, err := d.Execute(context.Background(), "hi"); err != nil {
+		t.Fatal(err)
+	}
+	if request.MaxTokens != 1234 {
+		t.Fatalf("request max tokens = %d", request.MaxTokens)
 	}
 }
 

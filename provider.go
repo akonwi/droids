@@ -3,7 +3,9 @@ package droids
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -20,6 +22,10 @@ type Providers interface {
 	// Model resolves a user-facing id to a concrete model. The id may be bare
 	// ("gpt-5.6") or namespaced ("openai/gpt-5.6") to disambiguate.
 	Model(id string) (Model, bool)
+	// RefreshModels fetches the latest models.dev catalog and overlays complete
+	// model metadata onto each built-in provider. Existing models remain usable
+	// when refresh fails.
+	RefreshModels(ctx context.Context) error
 	// Stream runs a request against the provider that owns model.
 	Stream(ctx context.Context, model Model, req Request) Stream
 }
@@ -33,13 +39,16 @@ type Provider interface {
 
 // providerEntry is the internal, resolved form of a Provider.
 type providerEntry struct {
-	id     string
-	models map[string]Model
-	stream streamFn
-	call   callOptions
+	id        string
+	catalogID string
+	baseURL   string
+	models    map[string]Model
+	stream    streamFn
+	call      callOptions
 }
 
 type registry struct {
+	mu      sync.RWMutex
 	entries map[string]providerEntry // by provider id
 	// index maps a bare model id to its owning provider id. Ambiguous ids
 	// (served by multiple providers) are omitted; callers must namespace.
@@ -66,33 +75,37 @@ func NewProviders(configs ...Provider) (Providers, error) {
 			return nil, fmt.Errorf("droids: duplicate provider id %q", entry.id)
 		}
 		r.entries[entry.id] = entry
-		for id := range entry.models {
-			if _, seen := r.index[id]; seen {
-				r.ambiguous[id] = true
-				continue
-			}
-			r.index[id] = entry.id
-		}
 	}
+	r.rebuildIndex()
 	return r, nil
 }
 
 func (r *registry) Models() []Model {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	var out []Model
 	for _, e := range r.entries {
 		for _, m := range e.models {
-			out = append(out, m)
+			out = append(out, cloneModel(m))
 		}
 	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Provider == out[j].Provider {
+			return out[i].ID < out[j].ID
+		}
+		return out[i].Provider < out[j].Provider
+	})
 	return out
 }
 
 func (r *registry) Model(id string) (Model, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	// Namespaced form: "provider/model".
 	if provID, modelID, ok := strings.Cut(id, "/"); ok {
 		if e, exists := r.entries[provID]; exists {
 			if m, exists := e.models[modelID]; exists {
-				return m, true
+				return cloneModel(m), true
 			}
 		}
 		// fall through: maybe the id legitimately contains a slash
@@ -102,15 +115,90 @@ func (r *registry) Model(id string) (Model, bool) {
 	}
 	if provID, ok := r.index[id]; ok {
 		m := r.entries[provID].models[id]
-		return m, true
+		return cloneModel(m), true
 	}
 	return Model{}, false
 }
 
+func (r *registry) RefreshModels(ctx context.Context) error {
+	return r.refreshModels(ctx, modelsDevCatalogURL)
+}
+
+func (r *registry) refreshModels(ctx context.Context, catalogURL string) error {
+	catalog, err := fetchModelCatalog(ctx, catalogURL)
+	if err != nil {
+		return err
+	}
+
+	type target struct {
+		providerID string
+		catalogID  string
+		baseURL    string
+	}
+	r.mu.RLock()
+	targets := make([]target, 0, len(r.entries))
+	for _, entry := range r.entries {
+		if entry.catalogID != "" {
+			targets = append(targets, target{
+				providerID: entry.id,
+				catalogID:  entry.catalogID,
+				baseURL:    entry.baseURL,
+			})
+		}
+	}
+	r.mu.RUnlock()
+
+	// Translation and sorting can be substantial for a remote catalog. Build
+	// overlays without blocking model lookup or streaming.
+	updates := make(map[string][]Model, len(targets))
+	for _, target := range targets {
+		models := catalogModels(catalog, target.catalogID, target.providerID)
+		setModelBaseURL(models, target.baseURL)
+		updates[target.providerID] = models
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for providerID, models := range updates {
+		entry, ok := r.entries[providerID]
+		if !ok || len(models) == 0 {
+			continue
+		}
+		for _, model := range models {
+			entry.models[model.ID] = model
+		}
+		r.entries[providerID] = entry
+	}
+	r.rebuildIndex()
+	return nil
+}
+
+func (r *registry) rebuildIndex() {
+	r.index = map[string]string{}
+	r.ambiguous = map[string]bool{}
+	for providerID, entry := range r.entries {
+		for modelID := range entry.models {
+			if previous, exists := r.index[modelID]; exists && previous != providerID {
+				delete(r.index, modelID)
+				r.ambiguous[modelID] = true
+				continue
+			}
+			if !r.ambiguous[modelID] {
+				r.index[modelID] = providerID
+			}
+		}
+	}
+}
+
 func (r *registry) Stream(ctx context.Context, model Model, req Request) Stream {
+	r.mu.RLock()
 	e, ok := r.entries[model.Provider]
+	r.mu.RUnlock()
 	if !ok {
 		return erroredStream(model, fmt.Sprintf("unknown provider %q", model.Provider))
+	}
+	if _, err := resolveRequestMaxTokens(model, req.MaxTokens, req.Reasoning); err != nil {
+		return erroredStream(model, err.Error())
 	}
 	return e.stream(ctx, model, req, e.call)
 }

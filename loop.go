@@ -159,11 +159,29 @@ func (d *Droid) runPrompt(qp queuedPrompt) runResult {
 			return runResult{message: aborted, err: err}
 		}
 
+		// At run start, pending steering is part of the prospective first request
+		// and must be included in compaction accounting. Like seed input, announce
+		// it before the first assistant turn. Continuations retain steering so
+		// their exact tool-result tail is unchanged.
+		if step == 0 && !qp.continuation {
+			for _, m := range d.drainSteering() {
+				d.appendMessage(ctx, m)
+				d.emit(MessageStart{Message: m})
+				d.emit(MessageEnd{Message: m})
+			}
+			if _, err := d.compact(ctx, CompactionThreshold, false); err != nil {
+				failed := compactionErrorMessage(d.model, err)
+				d.emit(ErrorEvent{Message: failed})
+				d.emit(AgentEnd{Messages: d.snapshot()})
+				return runResult{message: failed, err: err}
+			}
+		}
+
 		d.emit(TurnStart{})
 
-		// A continuation must preserve the exact tool-result tail: do not inject
-		// pending/concurrent steering. Retain it for the next normal run.
-		if !qp.continuation {
+		// Steering that arrives during a multi-step run is picked up between
+		// later turns. The first turn drained it above for compaction accounting.
+		if step > 0 && !qp.continuation {
 			for _, m := range d.drainSteering() {
 				d.appendMessage(ctx, m)
 				d.emit(MessageStart{Message: m})
@@ -173,9 +191,33 @@ func (d *Droid) runPrompt(qp queuedPrompt) runResult {
 
 		msg := d.streamTurn(ctx)
 		last = msg
+		overflowTurnEnded := false
 
-		if msg.StopReason == StopReasonError || msg.StopReason == StopReasonAborted {
+		// A provider-confirmed overflow gets one compaction-and-retry attempt on
+		// the first provider step of a normal run. Close the rejected attempt's
+		// turn before signaling compaction; a successful retry starts a new turn.
+		if step == 0 && !qp.continuation && msg.StopReason == StopReasonContextWindow && d.opts.Compact != nil {
 			d.emit(TurnEnd{Message: msg})
+			overflowTurnEnded = true
+			applied, err := d.compact(ctx, CompactionOverflow, true)
+			if err != nil {
+				failed := compactionErrorMessage(d.model, err)
+				d.emit(ErrorEvent{Message: failed})
+				d.emit(AgentEnd{Messages: d.snapshot()})
+				return runResult{message: failed, err: err}
+			}
+			if applied {
+				d.emit(TurnStart{})
+				msg = d.streamTurn(ctx)
+				last = msg
+				overflowTurnEnded = false
+			}
+		}
+
+		if msg.StopReason == StopReasonError || msg.StopReason == StopReasonContextWindow || msg.StopReason == StopReasonAborted {
+			if !overflowTurnEnded {
+				d.emit(TurnEnd{Message: msg})
+			}
 			d.emit(ErrorEvent{Message: msg, Aborted: msg.StopReason == StopReasonAborted})
 			d.emit(AgentEnd{Messages: d.snapshot()})
 			// Preserve cancellation error identity (errors.Is) when the abort
@@ -212,7 +254,7 @@ func (d *Droid) streamTurn(ctx context.Context) AssistantMessage {
 		Messages:     d.snapshot(),
 		Tools:        d.toolSchemas(),
 		Reasoning:    d.opts.Reasoning,
-		MaxTokens:    d.model.MaxTokens,
+		MaxTokens:    d.maxTokens,
 	}
 
 	stream := d.providers.Stream(ctx, d.model, req)
@@ -240,7 +282,12 @@ func (d *Droid) streamTurn(ctx context.Context) AssistantMessage {
 	if final.Model == "" {
 		final.Model = d.model.ID
 	}
-	d.appendMessage(ctx, final)
+	// A context-window rejection is a failed request rather than a completed
+	// assistant message. Keep it out of active and durable history so a compacted
+	// retry can proceed from the original transcript.
+	if final.StopReason != StopReasonContextWindow {
+		d.appendMessage(ctx, final)
+	}
 	if !started {
 		d.emit(MessageStart{Message: final})
 	}
@@ -547,4 +594,14 @@ func errText(m AssistantMessage) string {
 		return m.ErrorMessage
 	}
 	return string(m.StopReason)
+}
+
+func compactionErrorMessage(model Model, err error) AssistantMessage {
+	return AssistantMessage{
+		Provider:     model.Provider,
+		Model:        model.ID,
+		StopReason:   StopReasonError,
+		ErrorMessage: err.Error(),
+		Timestamp:    time.Now().UnixMilli(),
+	}
 }
