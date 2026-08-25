@@ -177,8 +177,29 @@ func (d *Droid) compact(ctx context.Context, reason CompactionReason, force bool
 // It favors early compaction, but model tokenization can still differ. Provider
 // token counters can replace it later without changing the hook API.
 func estimateRequestTokens(req Request) int {
-	bytes := len(req.SystemPrompt) + 32
-	for _, message := range req.Messages {
+	bytes := len(req.SystemPrompt) + 32 + estimateMessagesBytes(req.Messages)
+	for _, tool := range req.Tools {
+		bytes += 32 + len(tool.Name) + len(tool.Description)
+		if encoded, err := json.Marshal(tool.Parameters); err == nil {
+			bytes += len(encoded)
+		}
+	}
+	// Two UTF-8 bytes per token intentionally biases the generic estimate high
+	// for prose and code. Round upward and retain framing overhead so tiny
+	// requests never estimate to zero. Exact provider counters may replace it.
+	return (bytes + 1) / 2
+}
+
+// EstimateMessagesTokens returns Droids' conservative, provider-neutral token
+// estimate for a message slice. Compaction hooks can use it to bound chunks
+// with the same approximation Droids uses for context-pressure decisions.
+func EstimateMessagesTokens(messages []Message) int {
+	return (estimateMessagesBytes(messages) + 1) / 2
+}
+
+func estimateMessagesBytes(messages []Message) int {
+	bytes := 0
+	for _, message := range messages {
 		bytes += 24
 		switch msg := message.(type) {
 		case UserMessage:
@@ -191,16 +212,7 @@ func estimateRequestTokens(req Request) int {
 			bytes += estimateContentBytes(msg.Content)
 		}
 	}
-	for _, tool := range req.Tools {
-		bytes += 32 + len(tool.Name) + len(tool.Description)
-		if encoded, err := json.Marshal(tool.Parameters); err == nil {
-			bytes += len(encoded)
-		}
-	}
-	// Two UTF-8 bytes per token intentionally biases the generic estimate high
-	// for prose and code. Round upward and retain framing overhead so tiny
-	// requests never estimate to zero. Exact provider counters may replace it.
-	return (bytes + 1) / 2
+	return bytes
 }
 
 func estimateContentBytes(content []Content) int {

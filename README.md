@@ -354,7 +354,9 @@ Droids replaces only its active in-memory context. It never deletes or rewrites
 `Storage`; durable applications own checkpoint persistence and should make
 future `Storage.Load` calls reconstruct the checkpoint plus its raw tail. Hook
 implementations may use another in-memory Droid with a fast summarization model,
-but that Droid should omit `Compact` to avoid recursive compaction.
+but that Droid should omit `Compact` to avoid recursive compaction. Hooks that
+batch messages can use `EstimateMessagesTokens` to apply the same conservative,
+provider-neutral approximation as Droids' pressure detection.
 
 `CompactionStart` and `CompactionEnd` events expose context estimates and whether
 a replacement was applied without exposing summary content. Estimates are

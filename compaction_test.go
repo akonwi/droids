@@ -640,11 +640,15 @@ func TestContextUsageRemainingUsesExactMinimum(t *testing.T) {
 
 func TestApproximateTokenEstimateBiasesHighForNonASCII(t *testing.T) {
 	text := strings.Repeat("🙂漢字", 50)
-	tokens := estimateRequestTokens(Request{Messages: []Message{
+	messages := []Message{
 		UserMessage{Content: []Content{TextContent{Text: text}}},
-	}})
+	}
+	tokens := estimateRequestTokens(Request{Messages: messages})
 	if tokens < len([]rune(text)) {
 		t.Fatalf("estimate = %d, runes = %d", tokens, len([]rune(text)))
+	}
+	if got, want := EstimateMessagesTokens(messages), tokens-estimateRequestTokens(Request{}); got != want {
+		t.Fatalf("message estimate = %d, want request contribution %d", got, want)
 	}
 }
 
